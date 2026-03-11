@@ -144,7 +144,7 @@ export default function ScenarioBuilder({ onCreated }) {
                     className={`${inputClass} appearance-none`}
                   >
                     {LANGUAGES.map((l) => (
-                      <option key={l.value} value={l.value} className="bg-white/[0.03] text-white">{l.label}</option>
+                      <option key={l.value} value={l.value} className="bg-[#1a1a1a] text-white">{l.label}</option>
                     ))}
                   </select>
                 </div>
