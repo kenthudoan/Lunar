@@ -26,11 +26,11 @@ export const useGameStore = create((set) => ({
   // Actions
   setScenarios: (scenarios) => set({ scenarios }),
   setActiveScenario: (scenario) => {
-    try { sessionStorage.setItem('lunar_activeScenario', JSON.stringify(scenario)) } catch {}
+    try { localStorage.setItem('lunar_activeScenario', JSON.stringify(scenario)) } catch {}
     return set({ activeScenario: scenario })
   },
   setActiveCampaignId: (id) => {
-    try { sessionStorage.setItem('lunar_activeCampaignId', id) } catch {}
+    try { localStorage.setItem('lunar_activeCampaignId', id) } catch {}
     return set({ activeCampaignId: id })
   },
   setStreaming: (isStreaming) => set({ isStreaming }),
@@ -39,7 +39,7 @@ export const useGameStore = create((set) => ({
   appendMessage: (msg) =>
     set((s) => {
       const updated = [...s.messages, msg]
-      try { sessionStorage.setItem('lunar_messages', JSON.stringify(updated)) } catch {}
+      try { localStorage.setItem('lunar_messages', JSON.stringify(updated)) } catch {}
       return { messages: updated }
     }),
 
@@ -52,12 +52,12 @@ export const useGameStore = create((set) => ({
       } else {
         messages.push({ role: 'assistant', content: chunk })
       }
-      try { sessionStorage.setItem('lunar_messages', JSON.stringify(messages)) } catch {}
+      try { localStorage.setItem('lunar_messages', JSON.stringify(messages)) } catch {}
       return { messages }
     }),
 
   clearMessages: () => {
-    try { sessionStorage.removeItem('lunar_messages') } catch {}
+    try { localStorage.removeItem('lunar_messages') } catch {}
     return set({ messages: [] })
   },
 
@@ -81,9 +81,9 @@ export const useGameStore = create((set) => ({
   // Session persistence
   restoreSession: () => {
     try {
-      const scenarioJson = sessionStorage.getItem('lunar_activeScenario')
-      const campaignId = sessionStorage.getItem('lunar_activeCampaignId')
-      const messagesJson = sessionStorage.getItem('lunar_messages')
+      const scenarioJson = localStorage.getItem('lunar_activeScenario')
+      const campaignId = localStorage.getItem('lunar_activeCampaignId')
+      const messagesJson = localStorage.getItem('lunar_messages')
       const restored = {}
       if (scenarioJson) restored.activeScenario = JSON.parse(scenarioJson)
       if (campaignId) restored.activeCampaignId = campaignId
@@ -97,9 +97,9 @@ export const useGameStore = create((set) => ({
 
   clearSession: () => {
     try {
-      sessionStorage.removeItem('lunar_activeScenario')
-      sessionStorage.removeItem('lunar_activeCampaignId')
-      sessionStorage.removeItem('lunar_messages')
+      localStorage.removeItem('lunar_activeScenario')
+      localStorage.removeItem('lunar_activeCampaignId')
+      localStorage.removeItem('lunar_messages')
     } catch {}
     set({ activeScenario: null, activeCampaignId: null, messages: [], journal: [], inventory: [] })
   },

@@ -101,6 +101,16 @@ def get_story_cards(scenario_id: str):
         return [c.__dict__ for c in store.get_story_cards(scenario_id)]
 
 
+@router.post("/{scenario_id}/campaigns", status_code=201)
+def create_campaign(scenario_id: str, req: CampaignData):
+    with _get_store() as store:
+        scenario = store.get_scenario(scenario_id)
+        if not scenario:
+            raise HTTPException(status_code=404, detail="Scenario not found")
+        campaign = store.create_campaign(scenario_id, req.player_name)
+    return campaign.__dict__
+
+
 @router.get("/{scenario_id}/campaigns")
 def get_campaigns(scenario_id: str):
     with _get_store() as store:

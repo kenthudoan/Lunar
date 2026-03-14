@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Link, useNavigate } from 'react-router-dom'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useGameStore } from './store'
-import { fetchScenarios, exportScenario } from './api'
+import { fetchScenarios, exportScenario, fetchCampaigns, createCampaign, checkNeo4j } from './api'
 import GameCanvas from './components/GameCanvas'
 import ScenarioBuilder from './components/ScenarioBuilder'
 
@@ -24,17 +24,51 @@ function Home() {
   const { scenarios, setScenarios, setActiveScenario, setActiveCampaignId, clearMessages } =
     useGameStore()
   const navigate = useNavigate()
+  const [campaignsMap, setCampaignsMap] = useState({})
 
   useEffect(() => {
     fetchScenarios()
-      .then(setScenarios)
+      .then((data) => {
+        setScenarios(data)
+        data.forEach((s) =>
+          fetchCampaigns(s.id)
+            .then((camps) => setCampaignsMap((prev) => ({ ...prev, [s.id]: camps })))
+            .catch(() => {})
+        )
+      })
       .catch(() => {})
   }, [])
 
-  const startCampaign = (scenario) => {
+  const warnIfNeo4jDown = async () => {
+    const ok = await checkNeo4j()
+    if (!ok) {
+      alert(
+        'Neo4j is not running.\n\n' +
+        'The World Map will not be available during this session. ' +
+        'Entity relationships and graph data will not be stored.\n\n' +
+        'To enable it, start Neo4j via Docker:\n' +
+        'docker-compose up -d neo4j'
+      )
+    }
+  }
+
+  const startNewCampaign = async (scenario) => {
+    try {
+      await warnIfNeo4jDown()
+      const campaign = await createCampaign(scenario.id)
+      setActiveScenario(scenario)
+      setActiveCampaignId(campaign.id)
+      clearMessages()
+      navigate('/play')
+    } catch {
+      alert('Failed to create campaign')
+    }
+  }
+
+  const resumeCampaign = async (scenario, campaignId) => {
+    await warnIfNeo4jDown()
     setActiveScenario(scenario)
-    setActiveCampaignId(crypto.randomUUID())
-    clearMessages()
+    setActiveCampaignId(campaignId)
     navigate('/play')
   }
 
@@ -111,22 +145,38 @@ function Home() {
                       </p>
                     </div>
 
-                    <div className="flex gap-4">
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); exportScenario(s.id, s.title).catch(() => alert('Export failed.')) }}
-                        className="p-4 rounded-2xl border border-white/5 hover:border-white/20 text-white/20 hover:text-white transition-all"
-                        title="Export Node"
-                      >
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                      </button>
-                      
-                      <button 
-                        onClick={() => startCampaign(s)}
-                        className="px-8 py-4 rounded-2xl bg-white/5 hover:bg-white text-white/80 hover:text-black transition-all text-xs font-bold tracking-[0.2em] uppercase flex items-center gap-4"
-                      >
-                        Initialize Link
-                        <PowerIcon />
-                      </button>
+                    <div className="flex flex-col gap-3 items-end">
+                      <div className="flex gap-4">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); exportScenario(s.id, s.title).catch(() => alert('Export failed.')) }}
+                          className="p-4 rounded-2xl border border-white/5 hover:border-white/20 text-white/20 hover:text-white transition-all"
+                          title="Export Node"
+                        >
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        </button>
+
+                        <button
+                          onClick={() => startNewCampaign(s)}
+                          className="px-8 py-4 rounded-2xl bg-white/5 hover:bg-white text-white/80 hover:text-black transition-all text-xs font-bold tracking-[0.2em] uppercase flex items-center gap-4"
+                        >
+                          New Link
+                          <PowerIcon />
+                        </button>
+                      </div>
+                      {(campaignsMap[s.id] || []).length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {campaignsMap[s.id].map((c) => (
+                            <button
+                              key={c.id}
+                              onClick={() => resumeCampaign(s, c.id)}
+                              className="px-4 py-2 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/30 text-emerald-400 hover:text-emerald-300 transition-all text-[10px] font-bold tracking-widest uppercase border border-emerald-500/20"
+                              title={`Created: ${new Date(c.created_at).toLocaleString()}`}
+                            >
+                              Resume {c.id.slice(0, 8)}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

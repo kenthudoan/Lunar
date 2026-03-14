@@ -210,6 +210,22 @@ async def player_action(req: PlayerActionRequest):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+@router.get("/{campaign_id}/history")
+async def get_history(campaign_id: str):
+    """Return PLAYER_ACTION and NARRATOR_RESPONSE events to rebuild chat UI."""
+    events = _event_store.get_by_type(campaign_id, EventType.PLAYER_ACTION) + \
+             _event_store.get_by_type(campaign_id, EventType.NARRATOR_RESPONSE)
+    events.sort(key=lambda e: e.created_at)
+    messages = []
+    for ev in events:
+        text = ev.payload.get("text", "")
+        if ev.event_type == EventType.PLAYER_ACTION:
+            messages.append({"role": "user", "content": text})
+        else:
+            messages.append({"role": "assistant", "content": text})
+    return {"messages": messages}
+
+
 @router.get("/{campaign_id}/journal")
 async def get_journal(campaign_id: str, category: str | None = None):
     if category:

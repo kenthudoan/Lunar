@@ -1,5 +1,16 @@
 const BASE = '/api'  // proxied to http://localhost:8000 via vite proxy
 
+export async function checkNeo4j() {
+  try {
+    const r = await fetch(`${BASE}/health/neo4j`)
+    if (!r.ok) return false
+    const data = await r.json()
+    return data.status === 'ok'
+  } catch {
+    return false
+  }
+}
+
 export async function fetchScenarios() {
   const r = await fetch(`${BASE}/scenarios/`)
   if (!r.ok) throw new Error('Failed to fetch scenarios')
@@ -29,6 +40,28 @@ export async function addStoryCard(scenarioId, data) {
     body: JSON.stringify(data),
   })
   if (!r.ok) throw new Error('Failed to add story card')
+  return r.json()
+}
+
+export async function fetchCampaigns(scenarioId) {
+  const r = await fetch(`${BASE}/scenarios/${scenarioId}/campaigns`)
+  if (!r.ok) throw new Error('Failed to fetch campaigns')
+  return r.json()
+}
+
+export async function createCampaign(scenarioId, playerName = 'Player') {
+  const r = await fetch(`${BASE}/scenarios/${scenarioId}/campaigns`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scenario_id: scenarioId, player_name: playerName }),
+  })
+  if (!r.ok) throw new Error('Failed to create campaign')
+  return r.json()
+}
+
+export async function fetchHistory(campaignId) {
+  const r = await fetch(`${BASE}/game/${campaignId}/history`)
+  if (!r.ok) throw new Error('Failed to fetch history')
   return r.json()
 }
 

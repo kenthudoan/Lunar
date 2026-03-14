@@ -29,6 +29,22 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/api/health/neo4j")
+async def health_neo4j():
+    uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+    user = os.environ.get("NEO4J_USER", "neo4j")
+    password = os.environ.get("NEO4J_PASSWORD", "lunar_password")
+    try:
+        from neo4j import AsyncGraphDatabase
+        driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
+        async with driver.session() as session:
+            await session.run("RETURN 1")
+        await driver.close()
+        return {"status": "ok"}
+    except Exception as e:
+        return {"status": "unavailable", "error": str(e)}
+
+
 class SettingsUpdateRequest(BaseModel):
     provider: str = "deepseek"
     model: str = "deepseek-chat"

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { Settings, Sparkles, Clock, Brain, Gem, Map, Backpack, BookOpen } from 'lucide-react'
 import { useGameStore } from '../store'
-import { streamAction, fetchJournal } from '../api'
+import { streamAction, fetchJournal, fetchHistory, fetchInventory as fetchInventoryApi } from '../api'
 import ActionInput from './ActionInput'
 import JournalPanel from './JournalPanel'
 import CombatOverlay from './CombatOverlay'
@@ -65,6 +65,24 @@ export default function GameCanvas() {
   useEffect(() => {
     if (!activeCampaignId) restoreSession()
   }, [])
+
+  // Restore chat history from backend when campaign has no local messages
+  useEffect(() => {
+    if (!activeCampaignId || messages.length > 0) return
+    fetchHistory(activeCampaignId)
+      .then(({ messages: history }) => {
+        if (history && history.length > 0) {
+          history.forEach((msg) => appendMessage(msg))
+        }
+      })
+      .catch(() => {})
+    fetchInventoryApi(activeCampaignId)
+      .then((items) => setInventory(items))
+      .catch(() => {})
+    fetchJournal(activeCampaignId)
+      .then((entries) => setJournal(entries))
+      .catch(() => {})
+  }, [activeCampaignId])
 
   const formatAutoPlotMessage = (plot) => {
     const kind = String(plot?.kind || '').toLowerCase()
