@@ -97,7 +97,8 @@ class PlotGenerator:
             and narrative_seconds_since_last >= rule.cooldown_narrative_seconds
         )
 
-    async def generate_npc(self, world_context: str) -> GeneratedNPC:
+    async def generate_npc(self, world_context: str, language: str = "en") -> GeneratedNPC:
+        lang_hint = f" Write all text values in {language}." if language and language != "en" else ""
         messages = [
             {
                 "role": "system",
@@ -105,7 +106,7 @@ class PlotGenerator:
                     "Generate a compelling NPC for this RPG world. "
                     "Return ONLY valid JSON (no markdown): "
                     '{"name": str, "personality": str, "power_level": int (1-10), '
-                    '"secret": str, "goal": str, "appearance": str}.'
+                    f'"secret": str, "goal": str, "appearance": str}}.{lang_hint}'
                 ),
             },
             {"role": "user", "content": f"World context:\n{world_context}"},
@@ -136,6 +137,7 @@ class PlotGenerator:
         location: str,
         world_context: str,
         narrative_time: int,
+        language: str = "en",
     ) -> RandomEvent:
         time_desc = (
             f"{narrative_time // 86400} days"
@@ -144,13 +146,14 @@ class PlotGenerator:
             if narrative_time >= 3600
             else f"{narrative_time // 60} minutes"
         )
+        lang_hint = f" Write all text values in {language}." if language and language != "en" else ""
         messages = [
             {
                 "role": "system",
                 "content": (
                     "Generate a contextually appropriate random encounter or event. "
                     "Return ONLY valid JSON: "
-                    '{"title": str, "description": str, "choices": [str, str, str]}.'
+                    f'{{"title": str, "description": str, "choices": [str, str, str]}}.{lang_hint}'
                 ),
             },
             {
@@ -184,13 +187,14 @@ class PlotGenerator:
                 choices=["Investigate", "Ignore", "Leave"],
             )
 
-    async def generate_plot_arc(self, world_context: str) -> str:
+    async def generate_plot_arc(self, world_context: str, language: str = "en") -> str:
+        lang_hint = f" Write in {language}." if language and language != "en" else ""
         messages = [
             {
                 "role": "system",
                 "content": (
                     "Generate a compelling plot hook for a new quest or story branch. "
-                    "Write 2-3 sentences of narrative prose. No lists or headers."
+                    f"Write 2-3 sentences of narrative prose. No lists or headers.{lang_hint}"
                 ),
             },
             {"role": "user", "content": f"World context:\n{world_context}"},

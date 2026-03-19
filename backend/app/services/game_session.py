@@ -165,6 +165,7 @@ class GameSession:
                 campaign_id=self.campaign_id,
                 narrative_seconds=narrative_time,
                 world_context=world_ctx,
+                language=self.language,
             )
             if world_changes:
                 self._event_store.append(
@@ -392,17 +393,18 @@ class GameSession:
 
             payload: dict
             if kind == "npc":
-                npc = await self._plot_generator.generate_npc(safe_context)
+                npc = await self._plot_generator.generate_npc(safe_context, language=self.language)
                 payload = {"kind": kind, "source": "auto", "data": asdict(npc)}
             elif kind == "event":
                 event = await self._plot_generator.generate_random_event(
                     location="current",
                     world_context=safe_context,
                     narrative_time=total_narrative_time,
+                    language=self.language,
                 )
                 payload = {"kind": kind, "source": "auto", "data": asdict(event)}
             else:
-                arc = await self._plot_generator.generate_plot_arc(safe_context)
+                arc = await self._plot_generator.generate_plot_arc(safe_context, language=self.language)
                 payload = {"kind": kind, "source": "auto", "data": {"text": arc}}
 
             self._event_store.append(

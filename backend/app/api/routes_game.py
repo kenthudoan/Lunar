@@ -138,6 +138,7 @@ class SettingsRequest(BaseModel):
 
 class GenerateRequest(BaseModel):
     type: str  # "npc", "event", "plot"
+    language: str = "en"
 
 
 class TimeskipRequest(BaseModel):
@@ -273,14 +274,14 @@ async def crystallize_memory(campaign_id: str):
 async def generate_content(campaign_id: str, req: GenerateRequest):
     world_ctx = _memory.build_context_window(campaign_id)
     if req.type == "npc":
-        npc = await _plot_generator.generate_npc(world_ctx)
+        npc = await _plot_generator.generate_npc(world_ctx, language=req.language)
         return asdict(npc)
     elif req.type == "event":
         total_time = _event_store.get_total_narrative_time(campaign_id)
-        event = await _plot_generator.generate_random_event("current", world_ctx, total_time)
+        event = await _plot_generator.generate_random_event("current", world_ctx, total_time, language=req.language)
         return asdict(event)
     elif req.type == "plot":
-        arc = await _plot_generator.generate_plot_arc(world_ctx)
+        arc = await _plot_generator.generate_plot_arc(world_ctx, language=req.language)
         return {"text": arc}
     return {"error": "Unknown type"}
 

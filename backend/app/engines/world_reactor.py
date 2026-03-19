@@ -53,6 +53,7 @@ class WorldReactor:
         campaign_id: str,
         narrative_seconds: int,
         world_context: str,
+        language: str = "en",
     ) -> str:
         tick_type = self.classify_tick(narrative_seconds)
         if tick_type == TickType.MICRO:
@@ -66,13 +67,17 @@ class WorldReactor:
             else f"{hours // 24} days"
         )
 
+        lang_hint = ""
+        if language and language != "en":
+            lang_hint = f" Write your response in {language}."
+
         messages = [
             {
                 "role": "system",
                 "content": (
                     f"You are a world simulation engine for an AI RPG. {prompt_instruction} "
                     "Write only world changes as narrative facts. No player perspective. "
-                    "No dialogue. Present tense."
+                    f"No dialogue. Present tense.{lang_hint}"
                 ),
             },
             {
