@@ -373,9 +373,21 @@ class GameSession:
 
     async def _handle_combat(self, player_input: str, meta: dict) -> AsyncIterator[str]:
         try:
-            griefing = await self._combat.anti_griefing_check(player_input)
+            griefing = await self._combat.anti_griefing_check(player_input, language=self.language)
             if griefing.rejected:
-                yield f"[The narrator shakes their head] {griefing.reason}"
+                rejection_text = griefing.reason
+                yield rejection_text
+                # Persist the rejection so META mode and history have context
+                self._history.append({"role": "user", "content": player_input})
+                self._history.append({"role": "assistant", "content": rejection_text})
+                self._event_store.append(
+                    campaign_id=self.campaign_id,
+                    event_type=EventType.NARRATOR_RESPONSE,
+                    payload={"text": rejection_text},
+                    narrative_time_delta=0,
+                    location="current",
+                    entities=[],
+                )
                 return
 
             npc_power = 5  # default; GraphEngine provides real value when available

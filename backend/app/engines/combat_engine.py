@@ -31,16 +31,20 @@ class CombatEngine:
     def __init__(self, llm):
         self._llm = llm
 
-    async def anti_griefing_check(self, action: str) -> AntiGriefingResult:
+    async def anti_griefing_check(self, action: str, language: str = "en") -> AntiGriefingResult:
         messages = [
             {
                 "role": "system",
                 "content": (
                     "Analyze this combat action for griefing. Return ONLY JSON: "
-                    '{"is_meta": bool, "is_physically_impossible": bool}. '
-                    "is_meta=true if the player claims victory by narrative fiat or authorial power. "
+                    '{"is_meta": bool, "is_physically_impossible": bool, "reason": str}. '
+                    "is_meta=true ONLY if the player claims VICTORY by narrative fiat, "
+                    "authorial power, or god-modding (e.g. 'I instantly kill everyone'). "
+                    "is_meta=false for surrendering, retreating, yielding, or any "
+                    "legitimate in-character action — these are valid combat choices. "
                     "is_physically_impossible=true if the action completely defies physics "
-                    "(teleportation, omnidirectional attacks, infinite force, etc.)."
+                    "(teleportation, omnidirectional attacks, infinite force, etc.). "
+                    f"Write the reason in the same language as the player's action ({language})."
                 ),
             },
             {"role": "user", "content": action},
@@ -50,15 +54,17 @@ class CombatEngine:
         if not data:
             return AntiGriefingResult(rejected=False)
 
+        reason = str(data.get("reason", "")).strip()
+
         if data.get("is_meta"):
             return AntiGriefingResult(
                 rejected=True,
-                reason="Meta-gaming attempt: claiming victory by narrative authority.",
+                reason=reason or "Meta-gaming: tentativa de controlar o resultado por autoridade narrativa.",
             )
         if data.get("is_physically_impossible"):
             return AntiGriefingResult(
                 rejected=True,
-                reason="Physically impossible action rejected.",
+                reason=reason or "Ação fisicamente impossível rejeitada.",
             )
         return AntiGriefingResult(rejected=False)
 
