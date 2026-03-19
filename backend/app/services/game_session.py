@@ -428,6 +428,22 @@ class GameSession:
             async for chunk in self._handle_narrative(player_input):
                 yield chunk
 
+    def _find_existing_node_id(self, name: str, name_to_id: dict[str, str]) -> str | None:
+        """Find an existing node by exact match or alias/substring matching.
+
+        Handles cases like 'Gojo' matching 'Satoru Gojo', or 'Megumi' matching
+        'Megumi Fushiguro'. Returns the node_id if found, None otherwise.
+        """
+        lower = name.lower()
+        # Exact match
+        if lower in name_to_id:
+            return name_to_id[lower]
+        # Check if the new name is a substring of an existing name, or vice versa
+        for existing_name, node_id in name_to_id.items():
+            if lower in existing_name or existing_name in lower:
+                return node_id
+        return None
+
     async def _extract_entities_to_graph(self, narrative_text: str):
         """Use LLM to extract entities and relationships from narrative, store in Neo4j."""
         messages = [
@@ -439,6 +455,11 @@ class GameSession:
                     '{"entities": [{"name": str, "type": "NPC|LOCATION|FACTION|ITEM|EVENT", '
                     '"attributes": {}}], '
                     '"relationships": [{"source": str, "target": str, "rel_type": str}]}. '
+                    "IMPORTANT: Always use the FULL canonical name for each entity. "
+                    "For example, use 'Satoru Gojo' not just 'Gojo', "
+                    "'Megumi Fushiguro' not just 'Megumi', "
+                    "'Nobara Kugisaki' not just 'Nobara'. "
+                    "For locations, use the most specific full name. "
                     "Only include entities explicitly named in the text. "
                     "rel_type should be a short verb phrase like GUARDS, LEADS, LOCATED_IN, OWNS, ALLIED_WITH."
                 ),
@@ -464,8 +485,11 @@ class GameSession:
             name = entity.get("name", "").strip()
             if not name:
                 continue
-            if name.lower() in name_to_id:
-                continue  # already exists
+            existing_id = self._find_existing_node_id(name, name_to_id)
+            if existing_id:
+                # Map this name variant to the existing node for relationship resolution
+                name_to_id[name.lower()] = existing_id
+                continue
             try:
                 node_type = WorldNodeType(entity.get("type", "NPC"))
             except ValueError:
@@ -478,11 +502,11 @@ class GameSession:
             name_to_id[name.lower()] = node.id
 
         for rel in data.get("relationships", []):
-            source_name = rel.get("source", "").strip().lower()
-            target_name = rel.get("target", "").strip().lower()
+            source_name = rel.get("source", "").strip()
+            target_name = rel.get("target", "").strip()
             rel_type = rel.get("rel_type", "RELATED_TO")
-            source_id = name_to_id.get(source_name)
-            target_id = name_to_id.get(target_name)
+            source_id = self._find_existing_node_id(source_name, name_to_id)
+            target_id = self._find_existing_node_id(target_name, name_to_id)
             if source_id and target_id and source_id != target_id:
                 await self._graph.add_relationship(source_id, target_id, rel_type)
 
