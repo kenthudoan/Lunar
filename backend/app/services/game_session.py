@@ -57,6 +57,7 @@ class GameSession:
         # Rebuild conversation history from persisted events so the AI
         # has full context even after a server restart or new session.
         self._rebuild_history_from_events()
+        self._rebuild_npc_minds_from_events()
 
         # If this is a brand-new campaign (no history) and we have an
         # opening narrative, seed the history so the AI knows the story setup.
@@ -82,6 +83,35 @@ class GameSession:
             else:
                 self._history.append({"role": "assistant", "content": text})
         self._turn_count = len(player_events)
+
+    def _rebuild_npc_minds_from_events(self) -> None:
+        """Rebuild NPC minds from persisted NPC_THOUGHT events."""
+        if not self._npc_minds:
+            return
+        thought_events = self._event_store.get_by_type(
+            self.campaign_id, EventType.NPC_THOUGHT,
+        )
+        if not thought_events:
+            return
+        # Group by NPC name, keeping the latest thoughts per NPC
+        latest_per_npc: dict[str, dict] = {}
+        for ev in thought_events:
+            name = ev.payload.get("name", "")
+            if name:
+                latest_per_npc[name] = ev.payload
+        # Reconstruct minds
+        for name, payload in latest_per_npc.items():
+            mind = self._npc_minds._ensure_mind(self.campaign_id, name)
+            for alias in payload.get("aliases", []):
+                if alias.lower() not in [a.lower() for a in mind.aliases]:
+                    mind.aliases.append(alias)
+            for key, value in payload.get("thoughts", {}).items():
+                if value:
+                    mind.set_thought(key, str(value))
+        logger.info(
+            "Rebuilt %d NPC minds from events for campaign %s",
+            len(latest_per_npc), self.campaign_id,
+        )
 
     async def process_action(self, player_input: str) -> AsyncIterator[str]:
         mode, meta = await self._narrator.detect_mode(player_input)
@@ -241,11 +271,25 @@ class GameSession:
                 world_ctx = await self._memory.build_context_window_async(self.campaign_id)
             else:
                 world_ctx = self._memory.build_context_window(self.campaign_id)
-            await self._npc_minds.update_npc_thoughts(
+            updated = await self._npc_minds.update_npc_thoughts(
                 campaign_id=self.campaign_id,
                 narrative_text=narrative_text,
                 world_context=world_ctx,
             )
+            # Persist NPC thoughts so they survive server restarts
+            for mind in updated:
+                self._event_store.append(
+                    campaign_id=self.campaign_id,
+                    event_type=EventType.NPC_THOUGHT,
+                    payload={
+                        "name": mind.name,
+                        "thoughts": {k: t.value for k, t in mind.thoughts.items()},
+                        "aliases": mind.aliases,
+                    },
+                    narrative_time_delta=0,
+                    location="npc_mind",
+                    entities=[mind.name],
+                )
         except Exception:
             logger.warning("NPC mind update failed", exc_info=True)
 
