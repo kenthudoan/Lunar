@@ -53,11 +53,17 @@ class GameSession:
             kind: {"last_turn": 0, "last_narrative_time": 0, "trigger_count": 0}
             for kind in self._auto_plot_rules.keys()
         }
+        # Plot lock: only one active plot at a time. A new plot can only
+        # be generated after enough turns pass for the narrator to integrate it.
+        self._plot_pending = False
+        self._plot_pending_since_turn = 0
+        self._PLOT_CONSUME_TURNS = 4  # turns needed to consider a plot consumed
 
         # Rebuild conversation history from persisted events so the AI
         # has full context even after a server restart or new session.
         self._rebuild_history_from_events()
         self._rebuild_npc_minds_from_events()
+        self._rebuild_plot_lock_from_events()
 
         # If this is a brand-new campaign (no history) and we have an
         # opening narrative, seed the history so the AI knows the story setup.
@@ -112,6 +118,25 @@ class GameSession:
             "Rebuilt %d NPC minds from events for campaign %s",
             len(latest_per_npc), self.campaign_id,
         )
+
+    def _rebuild_plot_lock_from_events(self) -> None:
+        """Check if there's a recent unresolved plot that should block new generation."""
+        plot_events = self._event_store.get_by_type(
+            self.campaign_id, EventType.PLOT_GENERATION,
+        )
+        if not plot_events:
+            return
+        # Count player actions after the last plot
+        last_plot = plot_events[-1]
+        player_events = self._event_store.get_by_type(
+            self.campaign_id, EventType.PLAYER_ACTION,
+        )
+        turns_after_plot = sum(
+            1 for e in player_events if e.created_at > last_plot.created_at
+        )
+        if turns_after_plot < self._PLOT_CONSUME_TURNS:
+            self._plot_pending = True
+            self._plot_pending_since_turn = self._turn_count - turns_after_plot
 
     async def process_action(self, player_input: str, max_tokens: int = 2000) -> AsyncIterator[str]:
         self._max_tokens = max_tokens
@@ -370,6 +395,16 @@ class GameSession:
         if not self._plot_generator or not self._auto_plot_rules:
             return
 
+        # Plot lock: if a plot is pending, check if enough turns passed to consume it
+        if self._plot_pending:
+            turns_since_plot = self._turn_count - self._plot_pending_since_turn
+            if turns_since_plot >= self._PLOT_CONSUME_TURNS:
+                self._plot_pending = False
+                logger.info("Plot lock released after %d turns for campaign %s",
+                            turns_since_plot, self.campaign_id)
+            else:
+                return  # Block all auto-plot while a plot is active
+
         safe_context = world_context or "(no context yet)"
         total_narrative_time = self._event_store.get_total_narrative_time(self.campaign_id)
 
@@ -423,6 +458,10 @@ class GameSession:
             state["last_turn"] = self._turn_count
             state["last_narrative_time"] = total_narrative_time
             state["trigger_count"] += 1
+
+            # Lock: block new plots until this one is consumed
+            self._plot_pending = True
+            self._plot_pending_since_turn = self._turn_count
 
             yield f"[PLOT_AUTO]{json.dumps(payload, ensure_ascii=False)}"
             break
