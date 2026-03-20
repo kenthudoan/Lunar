@@ -108,6 +108,16 @@ function Home() {
     try {
       await deleteScenario(scenarioId)
       setScenarios(scenarios.filter((s) => s.id !== scenarioId))
+      // Clear localStorage if the deleted scenario was the active one
+      try {
+        const stored = localStorage.getItem('lunar_activeScenario')
+        if (stored) {
+          const parsed = JSON.parse(stored)
+          if (parsed.id === scenarioId) {
+            useGameStore.getState().clearSession()
+          }
+        }
+      } catch {}
     } catch {
       alert('Failed to delete scenario.')
     }
