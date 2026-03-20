@@ -13,9 +13,25 @@ class ScenarioService:
         self,
         scenario_id: str,
         lore_text: str,
+        language: str = "en",
     ) -> list[StoryCard]:
         if not lore_text.strip():
             return []
+
+        lang_hint = ""
+        if language and language != "en":
+            lang_map = {
+                "pt-br": "Portuguese (Brazilian)",
+                "pt": "Portuguese",
+                "es": "Spanish",
+                "fr": "French",
+                "de": "German",
+                "ja": "Japanese",
+                "ko": "Korean",
+                "zh": "Chinese",
+            }
+            lang_name = lang_map.get(language, language)
+            lang_hint = f" IMPORTANT: The lore text is in {lang_name}. Preserve all names in their original language and write ALL content fields (personality, description, goals, secret, significance) in {lang_name}."
 
         messages = [
             {
@@ -29,6 +45,7 @@ class ScenarioService:
                     "For FACTION content include: goals, power_level. "
                     "For ITEM content include: description, significance. "
                     "Only include entities explicitly mentioned by name."
+                    + lang_hint
                 ),
             },
             {"role": "user", "content": lore_text},

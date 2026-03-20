@@ -56,11 +56,17 @@ class GameSession:
         # Active plot seeds and micro-hooks fed to the narrator as context
         self._active_plot_seeds: list[str] = []
         self._pending_micro_hook: str = ""
-        # Plot lock: only one active plot at a time. A new plot can only
-        # be generated after enough turns pass for the narrator to integrate it.
+        # Pending NPC seed: an auto-generated NPC waiting to be introduced
+        # in the narrative. Only one at a time — no new generation until
+        # the narrator has woven this NPC into the story.
+        self._pending_npc_seed: dict | None = None
+        self._pending_npc_introduced = False
+        # Plot lock: only one active element at a time. A new element can only
+        # be generated after the current one is presented and developed.
         self._plot_pending = False
         self._plot_pending_since_turn = 0
-        self._PLOT_CONSUME_TURNS = 4  # turns needed to consider a plot consumed
+        self._PLOT_CONSUME_TURNS = 4  # minimum turns before a plot is considered consumed
+        self._PLOT_MIN_CONSUME_TURNS = 2  # minimum turns even if confirmed in narrative
 
         # Rebuild conversation history from persisted events so the AI
         # has full context even after a server restart or new session.
@@ -150,6 +156,17 @@ class GameSession:
             self._plot_pending = True
             self._plot_pending_since_turn = self._turn_count - turns_after_plot
 
+    def rewind(self) -> None:
+        """Pop the last user+assistant message pair from history and decrement turn count."""
+        # Remove trailing assistant message if present
+        if self._history and self._history[-1]["role"] == "assistant":
+            self._history.pop()
+        # Remove trailing user message if present
+        if self._history and self._history[-1]["role"] == "user":
+            self._history.pop()
+        if self._turn_count > 0:
+            self._turn_count -= 1
+
     async def process_action(self, player_input: str, max_tokens: int = 2000) -> AsyncIterator[str]:
         self._max_tokens = max_tokens
         mode, meta = await self._narrator.detect_mode(player_input)
@@ -221,6 +238,37 @@ class GameSession:
             except Exception:
                 logger.warning("Auto plot generation failed", exc_info=True)
 
+    async def get_graph_relationship_summary(self) -> str:
+        """Query the graph engine for entity relationships and format as a concise string.
+
+        Returns a readable summary of the most relevant relationships (max ~20)
+        for injection into the narrator's system prompt. Returns empty string if
+        the graph engine is unavailable or has no data.
+        """
+        if not self._graph:
+            return ""
+        try:
+            nodes = await self._graph.get_all_nodes()
+            relationships = await self._graph.get_all_relationships()
+            if not relationships:
+                return ""
+
+            # Build node_id -> name lookup
+            id_to_name: dict[str, str] = {n.id: n.name for n in nodes}
+
+            # Format relationships as readable lines, cap at 20
+            lines: list[str] = []
+            for rel in relationships[:20]:
+                source = id_to_name.get(rel["source_id"], "Unknown")
+                target = id_to_name.get(rel["target_id"], "Unknown")
+                rel_type = rel["rel_type"].replace("_", " ")
+                lines.append(f"- {source} {rel_type} {target}")
+
+            return "\n".join(lines)
+        except Exception:
+            logger.warning("Failed to build graph relationship summary", exc_info=True)
+            return ""
+
     async def _handle_narrative(self, player_input: str, mode: NarrativeMode = NarrativeMode.NARRATIVE) -> AsyncIterator[str]:
         if self._graphiti:
             memory_ctx = await self._memory.build_context_window_async(self.campaign_id)
@@ -233,7 +281,7 @@ class GameSession:
             inventory_ctx = ""
             if self._inventory:
                 inventory_ctx = self._inventory.format_for_prompt(self.campaign_id)
-            # Build narrator hints from active plot seeds and micro-hooks
+            # Build narrator hints from active plot seeds, micro-hooks, and NPC seeds
             narrator_hints = ""
             if self._active_plot_seeds:
                 seeds = "\n".join(f"- {s}" for s in self._active_plot_seeds[-3:])
@@ -241,6 +289,20 @@ class GameSession:
             if self._pending_micro_hook:
                 narrator_hints += f"\nMICRO-HOOK (weave this detail naturally into your response):\n{self._pending_micro_hook}"
                 self._pending_micro_hook = ""  # consumed
+            if self._pending_npc_seed and not self._pending_npc_introduced:
+                npc = self._pending_npc_seed
+                narrator_hints += (
+                    f"\nNEW NPC TO INTRODUCE (weave this character into the scene naturally — "
+                    f"have them appear and interact with the player):\n"
+                    f"Name: {npc.get('name', 'Unknown')}\n"
+                    f"Appearance: {npc.get('appearance', '')}\n"
+                    f"Personality: {npc.get('personality', '')}\n"
+                    f"Goal: {npc.get('goal', '')}\n"
+                    f"Power Level: {npc.get('power_level', 5)}/10"
+                )
+                self._pending_npc_introduced = True  # narrator has been told, mark as introduced
+
+            graph_ctx = await self.get_graph_relationship_summary()
 
             system_prompt = self._narrator.build_system_prompt(
                 tone_instructions=self.scenario_tone,
@@ -249,6 +311,7 @@ class GameSession:
                 inventory_context=inventory_ctx,
                 max_tokens=getattr(self, '_max_tokens', 2000),
                 narrator_hints=narrator_hints,
+                graph_context=graph_ctx,
             )
 
         # Stream narrative from LLM
@@ -333,6 +396,7 @@ class GameSession:
                 campaign_id=self.campaign_id,
                 narrative_text=narrative_text,
                 world_context=world_ctx,
+                language=self.language,
             )
             # Persist NPC thoughts so they survive server restarts
             for mind in updated:
@@ -417,15 +481,28 @@ class GameSession:
         if not self._plot_generator or not self._auto_plot_rules:
             return
 
-        # Plot lock: if a plot is pending, check if enough turns passed to consume it
+        # Plot lock: block new auto-plot until current element is consumed.
         if self._plot_pending:
             turns_since_plot = self._turn_count - self._plot_pending_since_turn
-            if turns_since_plot >= self._PLOT_CONSUME_TURNS:
+            consumed = False
+
+            if self._pending_npc_seed:
+                # NPC lock: require introduction + minimum development turns
+                if self._pending_npc_introduced and turns_since_plot >= self._PLOT_CONSUME_TURNS:
+                    consumed = True
+                    self._pending_npc_seed = None
+                    self._pending_npc_introduced = False
+            else:
+                # Non-NPC plots: standard timer
+                if turns_since_plot >= self._PLOT_CONSUME_TURNS:
+                    consumed = True
+
+            if consumed:
                 self._plot_pending = False
                 logger.info("Plot lock released after %d turns for campaign %s",
                             turns_since_plot, self.campaign_id)
             else:
-                return  # Block all auto-plot while a plot is active
+                return  # Block all auto-plot while element is active
 
         safe_context = world_context or "(no context yet)"
         total_narrative_time = self._event_store.get_total_narrative_time(self.campaign_id)
@@ -461,8 +538,24 @@ class GameSession:
 
             payload: dict
             if kind == "npc":
-                npc = await self._plot_generator.generate_npc(safe_context, language=self.language, recent_narrative=recent_narrative)
-                payload = {"kind": kind, "source": "auto", "data": asdict(npc)}
+                # Collect existing NPC names to avoid duplicates
+                existing_names = []
+                if self._npc_minds:
+                    existing_names = [m.name for m in self._npc_minds.get_all_minds(self.campaign_id)]
+                if self._pending_npc_seed:
+                    existing_names.append(self._pending_npc_seed.get("name", ""))
+
+                npc = await self._plot_generator.generate_npc(
+                    safe_context,
+                    language=self.language,
+                    recent_narrative=recent_narrative,
+                    existing_npc_names=existing_names,
+                )
+                npc_data = asdict(npc)
+                payload = {"kind": kind, "source": "auto", "data": npc_data}
+                # Store as pending NPC seed — narrator will introduce on next turn
+                self._pending_npc_seed = npc_data
+                self._pending_npc_introduced = False
                 # NPC seeds are shown to the player
                 yield f"[PLOT_AUTO]{json.dumps(payload, ensure_ascii=False)}"
             elif kind == "micro_hook":

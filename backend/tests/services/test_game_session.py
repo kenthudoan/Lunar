@@ -173,6 +173,7 @@ async def test_journal_entry_emitted_as_sse():
 
     event_store = MagicMock()
     event_store.append = MagicMock()
+    event_store.get_by_type = MagicMock(return_value=[])
 
     from app.services.game_session import GameSession
     session = GameSession(
@@ -252,6 +253,7 @@ async def test_process_action_triggers_auto_plot_generation_npc():
     event_store = MagicMock()
     event_store.append = MagicMock()
     event_store.get_total_narrative_time = MagicMock(return_value=7200)
+    event_store.get_by_type = MagicMock(return_value=[])
 
     plot_generator = MagicMock()
     plot_generator.should_trigger_auto = MagicMock(return_value=True)
@@ -296,6 +298,9 @@ async def test_process_action_triggers_auto_plot_generation_npc():
     assert len(auto_chunks) == 1
     payload = json.loads(auto_chunks[0][len("[PLOT_AUTO]"):])
     assert payload["kind"] == "npc"
+    # Verify NPC seed is stored for narrator integration
+    assert session._pending_npc_seed is not None
+    assert session._pending_npc_seed["name"] == "Captain Riven"
     assert payload["data"]["name"] == "Captain Riven"
     assert any(call.kwargs.get("event_type") == EventType.PLOT_GENERATION for call in event_store.append.call_args_list)
 
@@ -321,6 +326,7 @@ async def test_auto_plot_respects_cooldown_between_actions():
 
     event_store = MagicMock()
     event_store.append = MagicMock()
+    event_store.get_by_type = MagicMock(return_value=[])
     event_store.get_total_narrative_time = MagicMock(side_effect=[3600, 3600])
 
     plot_generator = MagicMock()

@@ -103,21 +103,35 @@ class PlotGenerator:
             and narrative_seconds_since_last >= rule.cooldown_narrative_seconds
         )
 
-    async def generate_npc(self, world_context: str, language: str = "en", recent_narrative: str = "") -> GeneratedNPC:
+    async def generate_npc(
+        self,
+        world_context: str,
+        language: str = "en",
+        recent_narrative: str = "",
+        existing_npc_names: list[str] | None = None,
+    ) -> GeneratedNPC:
         lang_hint = f" Write all text values in {language}." if language and language != "en" else ""
         recent_hint = f"\n\nRecent narrative:\n{recent_narrative}" if recent_narrative else ""
+        dedup_hint = ""
+        if existing_npc_names:
+            names_str = ", ".join(existing_npc_names[:30])
+            dedup_hint = (
+                f"\n\nIMPORTANT: These NPCs already exist in the story: [{names_str}]. "
+                "Generate a DIFFERENT character with a UNIQUE name. Do NOT reuse or create "
+                "variations of existing names."
+            )
         messages = [
             {
                 "role": "system",
                 "content": (
                     "Generate a compelling NPC for this RPG world. "
-                    "The NPC should be relevant to the world and could appear in future scenes. "
+                    "The NPC should be relevant to the current scene and recent events. "
                     "Return ONLY valid JSON (no markdown): "
                     '{"name": str, "personality": str, "power_level": int (1-10), '
                     f'"secret": str, "goal": str, "appearance": str}}.{lang_hint}'
                 ),
             },
-            {"role": "user", "content": f"World context:\n{world_context}{recent_hint}"},
+            {"role": "user", "content": f"World context:\n{world_context}{recent_hint}{dedup_hint}"},
         ]
         try:
             raw = await self._llm.complete(messages=messages)
