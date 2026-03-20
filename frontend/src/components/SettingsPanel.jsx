@@ -4,6 +4,8 @@ import { Settings, X } from 'lucide-react'
 
 const PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek', models: ['deepseek-chat', 'deepseek-reasoner'] },
+  { id: 'anthropic', label: 'Anthropic', models: ['claude-sonnet-4-6', 'claude-opus-4-6'] },
+  { id: 'openai', label: 'OpenAI', models: ['gpt-4o', 'gpt-4o-mini'] },
 ]
 
 export default function SettingsPanel({ open, onClose }) {
@@ -79,9 +81,15 @@ export default function SettingsPanel({ open, onClose }) {
             <label className="block text-[10px] font-bold uppercase tracking-widest font-mono text-white/40 mb-2">
               LLM Provider
             </label>
-            <div className="px-3 py-2 rounded-lg text-xs font-semibold bg-white/10 text-white border border-white/20">
-              DeepSeek
-            </div>
+            <select
+              value={provider}
+              onChange={(e) => handleProviderChange(e.target.value)}
+              className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white focus:outline-none focus:border-white/40 focus:bg-white/[0.05] transition-all"
+            >
+              {PROVIDERS.map((p) => (
+                <option key={p.id} value={p.id} className="bg-[#1a1a1a] text-white">{p.label}</option>
+              ))}
+            </select>
           </div>
 
           {/* Model */}

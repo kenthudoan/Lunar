@@ -35,12 +35,13 @@ class LLMRouter:
         model = self._build_model_string(
             self.config.primary_provider, self.config.primary_model
         )
+        max_tokens = kwargs.pop("max_tokens", self.config.max_tokens)
         try:
             response = await litellm.acompletion(
                 model=model,
                 messages=messages,
                 temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens,
+                max_tokens=max_tokens,
                 **kwargs,
             )
             return response.choices[0].message.content

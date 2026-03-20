@@ -5,6 +5,7 @@ from dataclasses import asdict
 from typing import AsyncIterator
 
 from app.db.event_store import EventStore, EventType
+from app.engines.llm_router import LLMProvider
 from app.engines.narrator_engine import NarrativeMode
 from app.engines.plot_generator import AUTO_PLOT_RULES
 from app.utils.json_parsing import parse_json_dict
@@ -167,8 +168,22 @@ class GameSession:
         if self._turn_count > 0:
             self._turn_count -= 1
 
+    def _is_single_call_provider(self) -> bool:
+        """Check if the current LLM provider supports single-call mode (large context)."""
+        try:
+            return self._narrator._llm.config.primary_provider == LLMProvider.ANTHROPIC
+        except AttributeError:
+            return False
+
     async def process_action(self, player_input: str, max_tokens: int = 2000) -> AsyncIterator[str]:
         self._max_tokens = max_tokens
+
+        # Single-call mode for Anthropic: one LLM call does everything
+        if self._is_single_call_provider():
+            async for chunk in self._process_action_single_call(player_input, max_tokens):
+                yield chunk
+            return
+
         mode, meta = await self._narrator.detect_mode(player_input)
         mode = self._coerce_mode(mode)
         narrative_time = meta.get("narrative_time_seconds", 60)
@@ -330,6 +345,28 @@ class GameSession:
 
             graph_ctx = await self.get_graph_relationship_summary()
 
+            npc_ctx = ""
+            if self._npc_minds:
+                minds = self._npc_minds.get_all_minds(self.campaign_id)
+                if minds:
+                    lines = ["NPC STATES (what each NPC is currently thinking/feeling):"]
+                    for m in minds[:10]:
+                        thoughts = ", ".join(f"{k}={t.value}" for k, t in list(m.thoughts.items())[:4])
+                        lines.append(f"- {m.name}: {thoughts}")
+                    npc_ctx = "\n".join(lines)
+
+            journal_ctx = ""
+            if self._journal:
+                try:
+                    entries = self._journal.get_journal(self.campaign_id)
+                    if entries:
+                        lines = ["STORY LOG (key events so far):"]
+                        for e in entries[-8:]:
+                            lines.append(f"- {e.summary}")
+                        journal_ctx = "\n".join(lines)
+                except Exception:
+                    pass
+
             system_prompt = self._narrator.build_system_prompt(
                 tone_instructions=self.scenario_tone,
                 memory_context=memory_ctx,
@@ -338,6 +375,8 @@ class GameSession:
                 max_tokens=getattr(self, '_max_tokens', 2000),
                 narrator_hints=narrator_hints,
                 graph_context=graph_ctx,
+                npc_context=npc_ctx,
+                journal_context=journal_ctx,
             )
 
         # Stream narrative from LLM
@@ -385,6 +424,280 @@ class GameSession:
         if mode != NarrativeMode.META and clean_response:
             async for chunk in self._post_narrative_pipeline(clean_response):
                 yield chunk
+
+    async def _process_action_single_call(self, player_input: str, max_tokens: int) -> AsyncIterator[str]:
+        """Single LLM call mode for Anthropic: narrative + mode + NPCs + entities in one request."""
+        # Build context (same as _handle_narrative)
+        if self._graphiti:
+            memory_ctx = await self._memory.build_context_window_async(self.campaign_id)
+        else:
+            memory_ctx = self._memory.build_context_window(self.campaign_id)
+
+        inventory_ctx = ""
+        if self._inventory:
+            inventory_ctx = self._inventory.format_for_prompt(self.campaign_id)
+
+        narrator_hints = ""
+        if self._active_plot_seeds:
+            seeds = "\n".join(f"- {s}" for s in self._active_plot_seeds[-3:])
+            narrator_hints += f"\nFUTURE PLOT SEEDS (foreshadow subtly, do NOT resolve yet):\n{seeds}"
+        if self._pending_micro_hook:
+            narrator_hints += f"\nMICRO-HOOK (weave this detail naturally into your response):\n{self._pending_micro_hook}"
+            self._pending_micro_hook = ""
+        if self._pending_npc_seed and not self._pending_npc_introduced:
+            npc = self._pending_npc_seed
+            narrator_hints += (
+                f"\nNEW NPC TO INTRODUCE (weave this character into the scene naturally — "
+                f"have them appear and interact with the player):\n"
+                f"Name: {npc.get('name', 'Unknown')}\n"
+                f"Appearance: {npc.get('appearance', '')}\n"
+                f"Personality: {npc.get('personality', '')}\n"
+                f"Goal: {npc.get('goal', '')}\n"
+                f"Power Level: {npc.get('power_level', 5)}/10"
+            )
+            self._pending_npc_introduced = True
+
+        graph_ctx = await self.get_graph_relationship_summary()
+
+        npc_ctx = ""
+        if self._npc_minds:
+            minds = self._npc_minds.get_all_minds(self.campaign_id)
+            if minds:
+                lines = ["NPC STATES (what each NPC is currently thinking/feeling):"]
+                for m in minds[:10]:
+                    thoughts = ", ".join(f"{k}={t.value}" for k, t in list(m.thoughts.items())[:4])
+                    lines.append(f"- {m.name}: {thoughts}")
+                npc_ctx = "\n".join(lines)
+
+        journal_ctx = ""
+        if self._journal:
+            try:
+                entries = self._journal.get_journal(self.campaign_id)
+                if entries:
+                    lines = ["STORY LOG (key events so far):"]
+                    for e in entries[-8:]:
+                        lines.append(f"- {e.summary}")
+                    journal_ctx = "\n".join(lines)
+            except Exception:
+                pass
+
+        static_prompt, dynamic_prompt = self._narrator.build_system_prompt_parts(
+            tone_instructions=self.scenario_tone,
+            memory_context=memory_ctx,
+            language=self.language,
+            inventory_context=inventory_ctx,
+            max_tokens=max_tokens,
+            narrator_hints=narrator_hints,
+            graph_context=graph_ctx,
+            npc_context=npc_ctx,
+            journal_context=journal_ctx,
+        )
+
+        # Collect canonical names for entity extraction
+        canonical_names: list[str] = []
+        if self._graph:
+            try:
+                existing_nodes = await self._graph.get_all_nodes()
+                canonical_names = [n.name for n in existing_nodes]
+            except Exception:
+                pass
+        if self._npc_minds:
+            for mind in self._npc_minds.get_all_minds(self.campaign_id):
+                if mind.name not in canonical_names:
+                    canonical_names.append(mind.name)
+
+        # Single LLM call with prompt caching on static part
+        result = await self._narrator.complete_single_call(
+            player_input=player_input,
+            static_prompt=static_prompt,
+            dynamic_prompt=dynamic_prompt,
+            history=self._history,
+            canonical_names=canonical_names,
+            max_tokens=max_tokens,
+        )
+
+        # Extract mode
+        mode_raw = str(result.get("mode", "NARRATIVE")).upper()
+        try:
+            mode = NarrativeMode(mode_raw)
+        except ValueError:
+            mode = NarrativeMode.NARRATIVE
+        mode = self._coerce_mode(mode)
+
+        narrative_time = int(result.get("narrative_time_seconds", 60))
+        if mode != NarrativeMode.META:
+            self._turn_count += 1
+
+        # Persist player action
+        self._event_store.append(
+            campaign_id=self.campaign_id,
+            event_type=EventType.PLAYER_ACTION,
+            payload={"text": player_input, "mode": mode.value},
+            narrative_time_delta=narrative_time,
+            location="current",
+            entities=["player"],
+        )
+
+        # Journal for player action
+        try:
+            log_player_action = getattr(self._journal, "log_player_action", None)
+            if callable(log_player_action):
+                player_entry = log_player_action(self.campaign_id, player_input)
+                if self._is_journal_entry(player_entry):
+                    yield f"[JOURNAL]{json.dumps({'category': player_entry.category.value, 'summary': player_entry.summary, 'created_at': player_entry.created_at})}"
+        except Exception:
+            pass
+
+        yield f"[MODE]{mode.value}"
+
+        # Get narrative text and emit it all at once
+        full_response = result.get("narrative_text", "")
+        cleaned = self._clean_truncated_response(full_response)
+
+        # Process inventory tags
+        clean_response = cleaned
+        if self._inventory:
+            clean_response, inv_events = self._extract_inventory_tags(cleaned)
+            for inv_event in inv_events:
+                self._apply_inventory_event(inv_event)
+                yield f"[INVENTORY]{json.dumps(inv_event)}"
+
+        # Emit full narrative
+        yield clean_response
+
+        # Record in history and event store
+        self._history.append({"role": "user", "content": player_input})
+        self._history.append({"role": "assistant", "content": clean_response})
+        self._event_store.append(
+            campaign_id=self.campaign_id,
+            event_type=EventType.NARRATOR_RESPONSE,
+            payload={"text": clean_response},
+            narrative_time_delta=0,
+            location="current",
+            entities=[],
+        )
+
+        # Journal evaluation for narrative
+        entry = await self._journal.evaluate_and_log(self.campaign_id, clean_response)
+        if self._is_journal_entry(entry):
+            yield f"[JOURNAL]{json.dumps({'category': entry.category.value, 'summary': entry.summary, 'created_at': entry.created_at})}"
+
+        # Apply side effects from the single-call result (no extra LLM calls!)
+        if mode != NarrativeMode.META and clean_response:
+            # NPC thoughts from result
+            npc_thoughts = result.get("npc_thoughts", [])
+            if npc_thoughts and self._npc_minds:
+                try:
+                    for npc_data in npc_thoughts:
+                        name = npc_data.get("name", "").strip()
+                        if not name:
+                            continue
+                        mind = self._npc_minds._ensure_mind(self.campaign_id, name)
+                        for key, value in npc_data.get("thoughts", {}).items():
+                            if value:
+                                mind.set_thought(key, str(value))
+                        self._event_store.append(
+                            campaign_id=self.campaign_id,
+                            event_type=EventType.NPC_THOUGHT,
+                            payload={
+                                "name": mind.name,
+                                "thoughts": {k: t.value for k, t in mind.thoughts.items()},
+                                "aliases": mind.aliases,
+                            },
+                            narrative_time_delta=0,
+                            location="npc_mind",
+                            entities=[mind.name],
+                        )
+                except Exception:
+                    logger.warning("Single-call NPC thought processing failed", exc_info=True)
+
+            # Entities and relationships from result
+            if self._graph:
+                try:
+                    from app.engines.graph_engine import WorldNodeType
+                    name_to_id: dict[str, str] = {}
+                    existing = await self._graph.get_all_nodes()
+                    for node in existing:
+                        name_to_id[node.name.lower()] = node.id
+
+                    for entity in result.get("entities", []):
+                        name = entity.get("name", "").strip()
+                        if not name:
+                            continue
+                        existing_id = self._find_existing_node_id(name, name_to_id)
+                        if existing_id:
+                            name_to_id[name.lower()] = existing_id
+                            continue
+                        try:
+                            node_type = WorldNodeType(entity.get("type", "NPC"))
+                        except ValueError:
+                            node_type = WorldNodeType.NPC
+                        node = await self._graph.add_node(
+                            node_type=node_type,
+                            name=name,
+                            attributes=entity.get("attributes", {}),
+                        )
+                        name_to_id[name.lower()] = node.id
+
+                    for rel in result.get("relationships", []):
+                        source_name = rel.get("source", "").strip()
+                        target_name = rel.get("target", "").strip()
+                        rel_type = rel.get("rel_type", "RELATED_TO")
+                        source_id = self._find_existing_node_id(source_name, name_to_id)
+                        target_id = self._find_existing_node_id(target_name, name_to_id)
+                        if source_id and target_id and source_id != target_id:
+                            await self._graph.add_relationship(source_id, target_id, rel_type)
+                except Exception:
+                    logger.warning("Single-call graph extraction failed", exc_info=True)
+
+            # World changes from result
+            world_changes = result.get("world_changes", "")
+            if world_changes:
+                self._event_store.append(
+                    campaign_id=self.campaign_id,
+                    event_type=EventType.WORLD_TICK,
+                    payload={"text": world_changes},
+                    narrative_time_delta=0,
+                    location="world",
+                    entities=[],
+                )
+
+            # Memory crystallization (still needed — local operation, no LLM unless threshold hit)
+            crystal = await self._try_auto_crystallize()
+            if crystal:
+                yield f"[CRYSTAL]{json.dumps({'tier': crystal.tier.value, 'event_count': crystal.event_count})}"
+
+            # Graphiti ingestion
+            await self._ingest_to_graphiti(clean_response, "narrator_response")
+
+            # World reactor tick (uses separate LLM call only for non-MICRO ticks)
+            if self._graphiti:
+                world_ctx = await self._memory.build_context_window_async(self.campaign_id)
+            else:
+                world_ctx = self._memory.build_context_window(self.campaign_id)
+            reactor_changes = await self._world_reactor.process_tick(
+                campaign_id=self.campaign_id,
+                narrative_seconds=narrative_time,
+                world_context=world_ctx,
+                language=self.language,
+            )
+            if reactor_changes:
+                self._event_store.append(
+                    campaign_id=self.campaign_id,
+                    event_type=EventType.WORLD_TICK,
+                    payload={"text": reactor_changes},
+                    narrative_time_delta=0,
+                    location="world",
+                    entities=[],
+                )
+                await self._ingest_to_graphiti(reactor_changes, "world_tick")
+
+            # Auto plot
+            try:
+                async for chunk in self._maybe_trigger_auto_plot(world_ctx):
+                    yield chunk
+            except Exception:
+                logger.warning("Auto plot generation failed", exc_info=True)
 
     def _apply_inventory_event(self, inv_event: dict) -> None:
         """Apply a single inventory event (add/use/lose)."""

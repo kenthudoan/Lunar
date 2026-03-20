@@ -1,9 +1,12 @@
 from __future__ import annotations
+import logging
 import re
 from enum import Enum
 from typing import AsyncIterator
 
 from app.utils.json_parsing import parse_json_dict
+
+logger = logging.getLogger(__name__)
 
 
 class NarrativeMode(str, Enum):
@@ -86,37 +89,10 @@ class NarratorEngine:
             )
         return ""
 
-    def build_system_prompt(
-        self,
-        tone_instructions: str,
-        memory_context: str,
-        language: str,
-        inventory_context: str = "",
-        max_tokens: int = 2000,
-        narrator_hints: str = "",
-        graph_context: str = "",
-    ) -> str:
-        lang_instruction = _LANGUAGE_INSTRUCTIONS.get(
-            language,
-            f"Respond in the language: {language}.",
-        )
-        sections = [
-            f"You are an AI narrator for an interactive RPG story. {lang_instruction}",
-        ]
-        if tone_instructions:
-            sections.append(f"\nTONE AND STYLE:\n{tone_instructions}")
-        if memory_context:
-            sections.append(f"\nWORLD MEMORY:\n{memory_context}")
-        if inventory_context:
-            sections.append(f"\nPLAYER INVENTORY:\n{inventory_context}")
-        if narrator_hints:
-            sections.append(narrator_hints)
-        if graph_context:
-            sections.append(f"\nWORLD RELATIONSHIPS (who knows who, connections between entities):\n{graph_context}")
-
+    def _build_narrator_rules(self, max_tokens: int) -> str:
+        """Build the static narrator rules block (same for all actions in a scenario)."""
         length_instruction = self._length_instruction(max_tokens)
-
-        sections.append(
+        return (
             "\nNARRATOR RULES:\n"
             "- Write immersive, evocative prose. Never break character.\n"
             "- React meaningfully to player choices. Consequences are real.\n"
@@ -134,7 +110,119 @@ class NarratorEngine:
             "- If the player tries to use an item NOT in their inventory, reject the action narratively.\n"
             "- Place item tags at the end of the relevant sentence, inline with the narrative."
         )
+
+    def build_system_prompt(
+        self,
+        tone_instructions: str,
+        memory_context: str,
+        language: str,
+        inventory_context: str = "",
+        max_tokens: int = 2000,
+        narrator_hints: str = "",
+        graph_context: str = "",
+        npc_context: str = "",
+        journal_context: str = "",
+    ) -> str:
+        lang_instruction = _LANGUAGE_INSTRUCTIONS.get(
+            language,
+            f"Respond in the language: {language}.",
+        )
+        sections = [
+            f"You are an AI narrator for an interactive RPG story. {lang_instruction}",
+        ]
+        if tone_instructions:
+            sections.append(f"\nTONE AND STYLE:\n{tone_instructions}")
+        if memory_context:
+            sections.append(f"\nWORLD MEMORY:\n{memory_context}")
+        if inventory_context:
+            sections.append(f"\nPLAYER INVENTORY:\n{inventory_context}")
+        if npc_context:
+            sections.append(f"\n{npc_context}")
+        if journal_context:
+            sections.append(f"\n{journal_context}")
+        if narrator_hints:
+            sections.append(narrator_hints)
+        if graph_context:
+            sections.append(f"\nWORLD RELATIONSHIPS (who knows who, connections between entities):\n{graph_context}")
+
+        # Context budget: if total prompt exceeds 6000 chars, trim lower-priority sections
+        total = sum(len(s) for s in sections)
+        if total > 6000:
+            # Priority order for trimming: graph_context first, then journal, then npc
+            for marker in [
+                "\nWORLD RELATIONSHIPS (who knows who, connections between entities):",
+                "\nSTORY LOG (key events so far):",
+                "\nNPC STATES (what each NPC is currently thinking/feeling):",
+            ]:
+                sections = [s for s in sections if not s.startswith(marker)]
+                total = sum(len(s) for s in sections)
+                if total <= 6000:
+                    break
+
+        sections.append(self._build_narrator_rules(max_tokens))
         return "\n".join(sections)
+
+    def build_system_prompt_parts(
+        self,
+        tone_instructions: str,
+        memory_context: str,
+        language: str,
+        inventory_context: str = "",
+        max_tokens: int = 2000,
+        narrator_hints: str = "",
+        graph_context: str = "",
+        npc_context: str = "",
+        journal_context: str = "",
+    ) -> tuple[str, str]:
+        """Build system prompt split into (static, dynamic) parts for prompt caching.
+
+        Static part: role + language + tone + narrator rules (fixed per scenario).
+        Dynamic part: memory, inventory, NPCs, journal, hints, graph (changes per action).
+        """
+        lang_instruction = _LANGUAGE_INSTRUCTIONS.get(
+            language,
+            f"Respond in the language: {language}.",
+        )
+
+        # Static: same for every action in this scenario
+        static_sections = [
+            f"You are an AI narrator for an interactive RPG story. {lang_instruction}",
+        ]
+        if tone_instructions:
+            static_sections.append(f"\nTONE AND STYLE:\n{tone_instructions}")
+        static_sections.append(self._build_narrator_rules(max_tokens))
+        static_part = "\n".join(static_sections)
+
+        # Dynamic: changes every action
+        dynamic_sections: list[str] = []
+        if memory_context:
+            dynamic_sections.append(f"\nWORLD MEMORY:\n{memory_context}")
+        if inventory_context:
+            dynamic_sections.append(f"\nPLAYER INVENTORY:\n{inventory_context}")
+        if npc_context:
+            dynamic_sections.append(f"\n{npc_context}")
+        if journal_context:
+            dynamic_sections.append(f"\n{journal_context}")
+        if narrator_hints:
+            dynamic_sections.append(narrator_hints)
+        if graph_context:
+            dynamic_sections.append(f"\nWORLD RELATIONSHIPS (who knows who, connections between entities):\n{graph_context}")
+
+        # Context budget on dynamic sections only
+        total = len(static_part) + sum(len(s) for s in dynamic_sections)
+        if total > 6000:
+            for marker in [
+                "\nWORLD RELATIONSHIPS (who knows who, connections between entities):",
+                "\nSTORY LOG (key events so far):",
+                "\nNPC STATES (what each NPC is currently thinking/feeling):",
+            ]:
+                dynamic_sections = [s for s in dynamic_sections if not s.startswith(marker)]
+                total = len(static_part) + sum(len(s) for s in dynamic_sections)
+                if total <= 6000:
+                    break
+
+        dynamic_part = "\n".join(dynamic_sections)
+        return static_part, dynamic_part
 
     def build_meta_prompt(
         self,
@@ -171,13 +259,114 @@ class NarratorEngine:
         history: list[dict],
     ) -> AsyncIterator[str]:
         messages = [{"role": "system", "content": system_prompt}]
-        messages.extend(history[-10:])
+        messages.extend(history[-30:])
         messages.append({"role": "user", "content": player_input})
         try:
             async for chunk in self._llm.stream(messages=messages):
                 yield chunk
         except Exception:
             yield self._fallback_narrative(player_input)
+
+    _SINGLE_CALL_FORMAT = (
+        "\n\n=== RESPONSE FORMAT ===\n"
+        "You MUST return ONLY valid JSON (no markdown fences) with this exact schema:\n"
+        "{\n"
+        '  "mode": "NARRATIVE|COMBAT|META",\n'
+        '  "narrative_time_seconds": <int, realistic story time this action takes>,\n'
+        '  "ambush": <bool, true only if NPC attacks player by surprise>,\n'
+        '  "narrative_text": "<your full narrative prose response>",\n'
+        '  "npc_thoughts": [{"name": "<full NPC name>", "thoughts": {"feeling": "...", "goal": "...", "opinion_of_player": "...", "secret_plan": "..."}}],\n'
+        '  "entities": [{"name": "<full name>", "type": "NPC|LOCATION|FACTION|ITEM|EVENT", "attributes": {}}],\n'
+        '  "relationships": [{"source": "<full name>", "target": "<full name>", "rel_type": "KNOWS|MET|ALLIED_WITH|GUARDS|LOCATED_IN|etc"}],\n'
+        '  "world_changes": "<brief description of background world changes, or empty string if none>"\n'
+        "}\n\n"
+        "IMPORTANT RULES FOR THIS FORMAT:\n"
+        "- narrative_text: Write your full immersive narrative here. All narrator rules still apply.\n"
+        "- mode: COMBAT if action is a fight, META if player speaks out-of-character, NARRATIVE otherwise.\n"
+        "- npc_thoughts: Only include NPCs that APPEAR or are MENTIONED in this scene.\n"
+        "- entities/relationships: Extract named entities from your narrative. Use FULL canonical names.\n"
+        "- world_changes: Only if significant time passes or major events affect the wider world. Empty string otherwise.\n"
+        "- The narrative_text must be complete, immersive prose — not a summary."
+    )
+
+    async def complete_single_call(
+        self,
+        player_input: str,
+        static_prompt: str,
+        dynamic_prompt: str,
+        history: list[dict],
+        canonical_names: list[str] | None = None,
+        max_tokens: int = 2000,
+    ) -> dict:
+        """Single LLM call that returns narrative + all side-effect data as JSON.
+
+        Uses Anthropic prompt caching: the static part (role + tone + rules + format)
+        is marked with cache_control so it's cached across actions in the same scenario.
+        The dynamic part (memory, NPCs, etc.) changes every action and is not cached.
+        """
+        names_hint = ""
+        if canonical_names:
+            names_str = ", ".join(canonical_names[:40])
+            names_hint = (
+                f"\nKNOWN ENTITIES (use these exact names for entity extraction): [{names_str}]"
+            )
+
+        # Static part: role + tone + narrator rules + JSON format (cached per scenario)
+        cached_text = static_prompt + self._SINGLE_CALL_FORMAT
+
+        # Dynamic part: memory + NPCs + hints + entity names (changes every action)
+        dynamic_text = dynamic_prompt + names_hint
+
+        # Build messages with cache_control on the static block
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": cached_text,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {
+                        "type": "text",
+                        "text": dynamic_text,
+                    },
+                ],
+            },
+        ]
+        messages.extend(history[-30:])
+        messages.append({"role": "user", "content": player_input})
+
+        try:
+            # User's narrative budget + 1500 tokens overhead for JSON metadata
+            api_max_tokens = max_tokens + 1500
+            raw = await self._llm.complete(messages=messages, max_tokens=api_max_tokens)
+            parsed = parse_json_dict(raw)
+            if parsed and parsed.get("narrative_text"):
+                return parsed
+            # JSON parsed but no narrative_text — log for debugging
+            if parsed:
+                logger.warning("Single-call: JSON parsed but missing narrative_text. Keys: %s", list(parsed.keys()))
+            else:
+                logger.warning(
+                    "Single-call: Failed to parse JSON from LLM response (length=%d). First 500 chars: %s",
+                    len(raw) if raw else 0,
+                    (raw or "")[:500],
+                )
+        except Exception:
+            logger.warning("Single-call narrative failed, using fallback", exc_info=True)
+
+        # Fallback: return minimal structure with fallback narrative
+        return {
+            "mode": "NARRATIVE",
+            "narrative_time_seconds": 60,
+            "ambush": False,
+            "narrative_text": self._fallback_narrative(player_input),
+            "npc_thoughts": [],
+            "entities": [],
+            "relationships": [],
+            "world_changes": "",
+        }
 
     @staticmethod
     def _heuristic_detect_mode(player_input: str) -> tuple[NarrativeMode, dict]:

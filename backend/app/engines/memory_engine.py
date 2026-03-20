@@ -26,8 +26,8 @@ class MemoryCrystal:
 
 
 class MemoryEngine:
-    RAW_LIMIT = 6
-    AUTO_CRYSTALLIZE_THRESHOLD = 8
+    RAW_LIMIT = 10
+    AUTO_CRYSTALLIZE_THRESHOLD = 4
     MAX_CRYSTALLIZE_EVENTS = 200
     MAX_SHORT_CRYSTALS_IN_CONTEXT = 2
     MAX_LONG_CRYSTALS_IN_CONTEXT = 2
@@ -96,10 +96,15 @@ class MemoryEngine:
                     "Return ONLY valid JSON (no markdown) with this schema:\n"
                     '{"ai_memory": str, "player_summary": str}\n\n'
                     "Rules:\n"
-                    "- ai_memory: machine-oriented ultra-compact memory for LLM context. "
-                    "Use dense abbreviations, avoid filler, avoid repeated facts.\n"
+                    "- ai_memory: machine-oriented structured memory for LLM context.\n"
+                    "- Use this EXACT format for ai_memory:\n"
+                    "  RELATIONSHIPS: [who knows who and how they met, e.g. 'Ryuu MET Megumi Fushiguro (deep conversation about loneliness on the rooftop)']\n"
+                    "  PROMISES: [agreements, pacts, deals the player made]\n"
+                    "  KEY_EVENTS: [major plot points in chronological order]\n"
+                    "  PLAYER_STATE: [current emotional state, goals, grudges]\n"
+                    "  WORLD_STATE: [faction standings, location changes, threats]\n"
                     "- player_summary: short executive summary for UI (2-4 sentences).\n"
-                    "- Preserve decisions, relationship shifts, world state, conflicts, unresolved hooks.\n"
+                    "- NEVER omit relationship details. WHO met WHO and WHAT they discussed is critical.\n"
                     "- Focus on net-new changes from NEW_EVENTS; do not restate stable facts unless changed."
                 ),
             },
