@@ -59,6 +59,13 @@ export async function createCampaign(scenarioId, playerName = 'Player') {
   return r.json()
 }
 
+export async function fetchCharacters(campaignId, query = '') {
+  const params = query ? `?q=${encodeURIComponent(query)}` : ''
+  const r = await fetch(`${BASE}/game/${campaignId}/characters${params}`)
+  if (!r.ok) return []
+  return r.json()
+}
+
 export async function fetchHistory(campaignId) {
   const r = await fetch(`${BASE}/game/${campaignId}/history`)
   if (!r.ok) throw new Error('Failed to fetch history')

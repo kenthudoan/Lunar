@@ -390,7 +390,7 @@ class GameSession:
     def _resolve_canonical_name(self, short_name: str, all_names: list[str]) -> str:
         """Resolve a potentially short name to its full canonical form.
 
-        E.g. 'Megumi' -> 'Megumi Fushiguro', 'Gojo' -> 'Satoru Gojo'.
+        E.g. 'ShortName' -> 'Full Canonical Name'.
         Returns the original name if no better match is found.
         """
         lower = short_name.lower()
@@ -444,7 +444,7 @@ class GameSession:
             logger.warning("Failed to build graph relationship summary", exc_info=True)
             return ""
 
-    async def _handle_narrative(self, player_input: str, mode: NarrativeMode = NarrativeMode.NARRATIVE) -> AsyncIterator[str]:
+    async def _handle_narrative(self, player_input: str, mode: NarrativeMode = NarrativeMode.NARRATIVE, combat_outcome: str = "") -> AsyncIterator[str]:
         if self._graphiti:
             memory_ctx = await self._memory.build_context_window_async(self.campaign_id)
         else:
@@ -480,6 +480,9 @@ class GameSession:
                     f"Power Level: {npc.get('power_level', 5)}/10"
                 )
                 # Do NOT mark as introduced yet — we verify after the narrative response
+
+            if combat_outcome:
+                narrator_hints += self._build_combat_narrator_hint(combat_outcome)
 
             graph_ctx = await self.get_graph_relationship_summary()
 
@@ -571,6 +574,79 @@ class GameSession:
 
     async def _process_action_single_call(self, player_input: str, max_tokens: int) -> AsyncIterator[str]:
         """Single LLM call mode for Anthropic: narrative + mode + NPCs + entities in one request."""
+        # Detect mode first so combat pipeline runs before the main LLM call
+        mode, meta = await self._narrator.detect_mode(player_input)
+        mode = self._coerce_mode(mode)
+        narrative_time = meta.get("narrative_time_seconds", 60)
+        if mode != NarrativeMode.META:
+            self._turn_count += 1
+
+        # Persist player action (same as streaming path)
+        self._event_store.append(
+            campaign_id=self.campaign_id,
+            event_type=EventType.PLAYER_ACTION,
+            payload={"text": player_input, "mode": mode.value},
+            narrative_time_delta=narrative_time,
+            location="current",
+            entities=["player"],
+        )
+
+        # Journal for player action
+        try:
+            log_player_action = getattr(self._journal, "log_player_action", None)
+            if callable(log_player_action):
+                player_entry = log_player_action(self.campaign_id, player_input)
+                if self._is_journal_entry(player_entry):
+                    yield f"[JOURNAL]{json.dumps({'category': player_entry.category.value, 'summary': player_entry.summary, 'created_at': player_entry.created_at})}"
+        except Exception:
+            pass
+
+        yield f"[MODE]{mode.value}"
+
+        # Combat pipeline: anti-griefing, evaluate, roll (same as streaming path)
+        combat_outcome = ""
+        combat_quality = 0.0
+        if mode == NarrativeMode.COMBAT and self._combat:
+            try:
+                griefing = await self._combat.anti_griefing_check(player_input, language=self.language)
+                if griefing.rejected:
+                    rejection_text = griefing.reason
+                    yield rejection_text
+                    self._history.append({"role": "user", "content": player_input})
+                    self._history.append({"role": "assistant", "content": rejection_text})
+                    self._event_store.append(
+                        campaign_id=self.campaign_id,
+                        event_type=EventType.NARRATOR_RESPONSE,
+                        payload={"text": rejection_text},
+                        narrative_time_delta=0,
+                        location="current",
+                        entities=[],
+                    )
+                    return
+
+                npc_power = 5
+                evaluation = await self._combat.evaluate_action(
+                    action=player_input,
+                    npc_name="opponent",
+                    npc_power=npc_power,
+                )
+                outcome = self._combat.roll_outcome(evaluation.final_quality, npc_power)
+                combat_outcome = outcome.value if hasattr(outcome, "value") else str(outcome)
+                combat_quality = evaluation.final_quality
+
+                self._event_store.append(
+                    campaign_id=self.campaign_id,
+                    event_type=EventType.COMBAT_RESULT,
+                    payload={"outcome": combat_outcome, "quality": combat_quality},
+                    narrative_time_delta=0,
+                    location="current",
+                    entities=["player"],
+                )
+
+                yield f"[Combat outcome: {combat_outcome}] "
+            except Exception:
+                logger.warning("Combat engine failed in single-call path", exc_info=True)
+
         # Build context (same as _handle_narrative)
         if self._graphiti:
             memory_ctx = await self._memory.build_context_window_async(self.campaign_id)
@@ -604,6 +680,9 @@ class GameSession:
                 f"Power Level: {npc.get('power_level', 5)}/10"
             )
             # Do NOT mark as introduced yet — we verify after the narrative response
+
+        if combat_outcome:
+            narrator_hints += self._build_combat_narrator_hint(combat_outcome)
 
         graph_ctx = await self.get_graph_relationship_summary()
 
@@ -667,40 +746,6 @@ class GameSession:
             context_window=context_window,
         )
 
-        # Extract mode
-        mode_raw = str(result.get("mode", "NARRATIVE")).upper()
-        try:
-            mode = NarrativeMode(mode_raw)
-        except ValueError:
-            mode = NarrativeMode.NARRATIVE
-        mode = self._coerce_mode(mode)
-
-        narrative_time = int(result.get("narrative_time_seconds", 60))
-        if mode != NarrativeMode.META:
-            self._turn_count += 1
-
-        # Persist player action
-        self._event_store.append(
-            campaign_id=self.campaign_id,
-            event_type=EventType.PLAYER_ACTION,
-            payload={"text": player_input, "mode": mode.value},
-            narrative_time_delta=narrative_time,
-            location="current",
-            entities=["player"],
-        )
-
-        # Journal for player action
-        try:
-            log_player_action = getattr(self._journal, "log_player_action", None)
-            if callable(log_player_action):
-                player_entry = log_player_action(self.campaign_id, player_input)
-                if self._is_journal_entry(player_entry):
-                    yield f"[JOURNAL]{json.dumps({'category': player_entry.category.value, 'summary': player_entry.summary, 'created_at': player_entry.created_at})}"
-        except Exception:
-            pass
-
-        yield f"[MODE]{mode.value}"
-
         # Get narrative text and emit it all at once
         full_response = result.get("narrative_text", "")
         cleaned = self._clean_truncated_response(full_response)
@@ -736,9 +781,19 @@ class GameSession:
         if self._is_journal_entry(entry):
             yield f"[JOURNAL]{json.dumps({'category': entry.category.value, 'summary': entry.summary, 'created_at': entry.created_at})}"
 
-        # Apply side effects from the single-call result (no extra LLM calls!)
+        # Combat journal entry (same as streaming path)
+        if combat_outcome and clean_response:
+            combat_summary = (
+                f"Combat action: {player_input}. "
+                f"Outcome: {combat_outcome}. Quality: {combat_quality}/10."
+            )
+            combat_entry = await self._journal.evaluate_and_log(self.campaign_id, combat_summary)
+            if self._is_journal_entry(combat_entry):
+                yield f"[JOURNAL]{json.dumps({'category': combat_entry.category.value, 'summary': combat_entry.summary, 'created_at': combat_entry.created_at})}"
+
+        # Apply side effects from the single-call result
         if mode != NarrativeMode.META and clean_response:
-            # NPC thoughts from result
+            # NPC thoughts from result (use async dedup for fuzzy matching parity)
             npc_thoughts = result.get("npc_thoughts", [])
             if npc_thoughts and self._npc_minds:
                 try:
@@ -746,7 +801,7 @@ class GameSession:
                         name = npc_data.get("name", "").strip()
                         if not name:
                             continue
-                        mind = self._npc_minds._ensure_mind(self.campaign_id, name)
+                        mind = await self._npc_minds._ensure_mind_async(self.campaign_id, name)
                         for key, value in npc_data.get("thoughts", {}).items():
                             if value:
                                 mind.set_thought(key, str(value))
@@ -1124,7 +1179,7 @@ class GameSession:
             outcome_hint = f"[Combat outcome: {outcome_value}] "
             yield outcome_hint
 
-            async for chunk in self._handle_narrative(player_input):
+            async for chunk in self._handle_narrative(player_input, combat_outcome=outcome_value):
                 yield chunk
 
             # Log combat as journal entry (supplement auto-detection)
@@ -1143,8 +1198,8 @@ class GameSession:
     def _find_existing_node_id(self, name: str, name_to_id: dict[str, str]) -> str | None:
         """Find an existing node by exact match or alias/substring matching.
 
-        Handles cases like 'Gojo' matching 'Satoru Gojo', or 'Megumi' matching
-        'Megumi Fushiguro'. Returns the node_id if found, None otherwise.
+        Handles cases like a short name matching its full canonical form.
+        Returns the node_id if found, None otherwise.
         """
         lower = name.lower()
         # Exact match
@@ -1175,8 +1230,8 @@ class GameSession:
             names_str = ", ".join(canonical_names[:40])
             name_hint = (
                 f"\n\nKNOWN ENTITIES (use these exact names when they appear in the text): "
-                f"[{names_str}]. If the text mentions a short form (e.g. 'Megumi'), "
-                f"match it to the full canonical name (e.g. 'Megumi Fushiguro')."
+                f"[{names_str}]. If the text mentions a short form, "
+                f"match it to the full canonical name from this list."
             )
 
         messages = [
@@ -1189,9 +1244,7 @@ class GameSession:
                     '"attributes": {}}], '
                     '"relationships": [{"source": str, "target": str, "rel_type": str}]}. '
                     "IMPORTANT: Always use the FULL canonical name for each entity. "
-                    "For example, use 'Satoru Gojo' not just 'Gojo', "
-                    "'Megumi Fushiguro' not just 'Megumi', "
-                    "'Nobara Kugisaki' not just 'Nobara'. "
+                    "Never abbreviate to just a first name or last name — use the complete name as it appears in the narrative. "
                     "For locations, use the most specific full name. "
                     "Only include entities explicitly named in the text. "
                     "rel_type should be a short verb phrase like GUARDS, LEADS, LOCATED_IN, OWNS, ALLIED_WITH, MET, KNOWS."
@@ -1243,6 +1296,50 @@ class GameSession:
             target_id = self._find_existing_node_id(target_name, name_to_id)
             if source_id and target_id and source_id != target_id:
                 await self._graph.add_relationship(source_id, target_id, rel_type)
+
+    @staticmethod
+    def _build_combat_narrator_hint(outcome: str) -> str:
+        """Build narrator instructions based on combat outcome.
+
+        Uses the creativity-based combat system rules:
+        - CRIT_SUCCESS: Spectacular success + 1 free action
+        - SUCCESS: Action succeeds as intended
+        - FAIL: Action fails, story continues
+        - CRIT_FAIL: Action backfires — NPC gains +2 actions
+        """
+        rules = {
+            "CRIT_SUCCESS": (
+                "\n\nCOMBAT RESULT — CRITICAL SUCCESS:\n"
+                "The player's action was SPECTACULARLY successful. "
+                "Narrate an impressive, cinematic success that exceeds expectations. "
+                "The player earns 1 FREE BONUS ACTION after this — hint at this opportunity. "
+                "Make the success feel earned and thrilling."
+            ),
+            "SUCCESS": (
+                "\n\nCOMBAT RESULT — SUCCESS:\n"
+                "The player's action SUCCEEDED as intended. "
+                "Narrate the action landing effectively. The opponent is affected. "
+                "Keep it grounded — success, not miraculous."
+            ),
+            "FAIL": (
+                "\n\nCOMBAT RESULT — FAIL:\n"
+                "The player's action FAILED. This is MANDATORY — do NOT narrate success. "
+                "The action must miss, be blocked, countered, or otherwise fail to achieve its goal. "
+                "The story continues — describe HOW it failed creatively. "
+                "The opponent may gain a tactical advantage. "
+                "DO NOT describe the player succeeding in any way."
+            ),
+            "CRIT_FAIL": (
+                "\n\nCOMBAT RESULT — CRITICAL FAILURE:\n"
+                "The player's action BACKFIRED catastrophically. This is MANDATORY. "
+                "The action not only failed but caused harm or disadvantage to the player. "
+                "The opponent gains +2 actions (a significant tactical advantage). "
+                "Narrate the backfire dramatically — the player's own move used against them, "
+                "a stumble that exposes a weakness, or an unintended consequence. "
+                "DO NOT describe any success. The situation worsens for the player."
+            ),
+        }
+        return rules.get(outcome, rules["FAIL"])
 
     @staticmethod
     def _clean_truncated_response(text: str) -> str:

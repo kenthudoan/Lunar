@@ -104,7 +104,8 @@ class NarratorEngine:
             "- Write immersive, evocative prose. Never break character.\n"
             "- React meaningfully to player choices. Consequences are real.\n"
             "- The world is alive — NPCs have their own agendas and memories.\n"
-            "- ALWAYS use FULL character names (e.g. 'Megumi Fushiguro' not 'Megumi', 'Satoru Gojo' not 'Gojo'). You may use short names in dialogue spoken by characters, but the narration itself must use full names.\n"
+            "- ALWAYS use FULL character names (first + last) in narration. You may use short names in dialogue spoken by characters, but the narration itself must use full names.\n"
+            "- When mentioning a character by name in narration, prefix their name with @ (e.g. @Satoru Gojo). This applies to ALL named characters and NPCs. Do NOT use @ in dialogue lines spoken by characters, only in narration text.\n"
             "- Stay consistent with the established tone.\n"
             "- Do NOT summarize. Narrate in present tense.\n"
             "- End each response at a natural pause, not mid-action.\n"
@@ -280,11 +281,43 @@ class NarratorEngine:
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history_slice)
         messages.append({"role": "user", "content": player_input})
+
+        # Debug logging: log full LLM request context
+        logger.debug(
+            "=== NARRATOR STREAM REQUEST ===\n"
+            "System prompt (%d tokens, %d chars):\n%s\n"
+            "History slice: %d messages (of %d total)\n"
+            "Player input: %s\n"
+            "Context window: %d",
+            system_tokens, len(system_prompt), system_prompt,
+            len(history_slice), len(history),
+            player_input,
+            context_window,
+        )
+        if logger.isEnabledFor(logging.DEBUG):
+            for idx, msg in enumerate(history_slice):
+                content = msg.get("content", "")
+                logger.debug(
+                    "  History[%d] role=%s len=%d: %s",
+                    idx, msg.get("role", "?"), len(content),
+                    content[:200] + ("..." if len(content) > 200 else ""),
+                )
+
+        full_response = ""
         try:
             async for chunk in self._llm.stream(messages=messages):
+                full_response += chunk
                 yield chunk
         except Exception:
             yield self._fallback_narrative(player_input)
+
+        # Debug logging: log full response
+        logger.debug(
+            "=== NARRATOR STREAM RESPONSE ===\n"
+            "Response length: %d chars\n%s",
+            len(full_response),
+            full_response[:500] + ("..." if len(full_response) > 500 else ""),
+        )
 
     _SINGLE_CALL_FORMAT = (
         "\n\n=== RESPONSE FORMAT ===\n"
@@ -362,10 +395,42 @@ class NarratorEngine:
         messages.extend(history_slice)
         messages.append({"role": "user", "content": player_input})
 
+        # Debug logging: log full single-call LLM request context
+        logger.debug(
+            "=== NARRATOR SINGLE-CALL REQUEST ===\n"
+            "Static prompt (%d chars): %s\n"
+            "Dynamic prompt (%d chars): %s\n"
+            "History slice: %d messages (of %d total)\n"
+            "Player input: %s\n"
+            "Context window: %d, max_tokens: %d",
+            len(cached_text), cached_text[:300] + ("..." if len(cached_text) > 300 else ""),
+            len(dynamic_text), dynamic_text[:500] + ("..." if len(dynamic_text) > 500 else ""),
+            len(history_slice), len(history),
+            player_input,
+            context_window, max_tokens,
+        )
+        if logger.isEnabledFor(logging.DEBUG):
+            for idx, msg in enumerate(history_slice):
+                content = msg.get("content", "")
+                logger.debug(
+                    "  History[%d] role=%s len=%d: %s",
+                    idx, msg.get("role", "?"), len(content),
+                    content[:200] + ("..." if len(content) > 200 else ""),
+                )
+
         try:
             # User's narrative budget + 1500 tokens overhead for JSON metadata
             api_max_tokens = max_tokens + 1500
             raw = await self._llm.complete(messages=messages, max_tokens=api_max_tokens)
+
+            # Debug logging: log full response
+            logger.debug(
+                "=== NARRATOR SINGLE-CALL RESPONSE ===\n"
+                "Response length: %d chars\n%s",
+                len(raw) if raw else 0,
+                (raw or "")[:500] + ("..." if raw and len(raw) > 500 else ""),
+            )
+
             parsed = parse_json_dict(raw)
             if parsed and parsed.get("narrative_text"):
                 return parsed

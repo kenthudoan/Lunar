@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { Settings, Sparkles, Clock, Brain, Gem, Map, Backpack, BookOpen, Undo2 } from 'lucide-react'
 import { useGameStore } from '../store'
@@ -13,6 +13,44 @@ import NpcInspector from './NpcInspector'
 import MemoryInspector from './MemoryInspector'
 import WorldMapModal from './WorldMapModal'
 import InventoryPanel from './InventoryPanel'
+
+/** Render text with @mentions highlighted in indigo */
+function MentionText({ children }) {
+  if (typeof children !== 'string') return children
+  // Match @Name (captures multi-word names like @Satoru Gojo until punctuation or end)
+  const parts = children.split(/(@[A-Z\u00C0-\u024F][A-Za-z\u00C0-\u024F]*(?:\s+[A-Z\u00C0-\u024F][A-Za-z\u00C0-\u024F]*)*)/g)
+  if (parts.length === 1) return children
+  return parts.map((part, i) => {
+    if (part.startsWith('@')) {
+      return (
+        <span key={i} className="text-indigo-400 font-medium" title={part.slice(1)}>
+          {part}
+        </span>
+      )
+    }
+    return part
+  })
+}
+
+/** ReactMarkdown components override to render @mentions in all text */
+const mentionComponents = {
+  p: ({ children }) => <p>{processChildren(children)}</p>,
+  li: ({ children }) => <li>{processChildren(children)}</li>,
+  em: ({ children }) => <em>{processChildren(children)}</em>,
+  strong: ({ children }) => <strong>{processChildren(children)}</strong>,
+}
+
+function processChildren(children) {
+  if (!children) return children
+  if (typeof children === 'string') return <MentionText>{children}</MentionText>
+  if (Array.isArray(children)) {
+    return children.map((child, i) => {
+      if (typeof child === 'string') return <MentionText key={i}>{child}</MentionText>
+      return child
+    })
+  }
+  return children
+}
 
 function NarratorSkeleton() {
   return (
@@ -323,7 +361,7 @@ export default function GameCanvas() {
               {messages.length === 0 && activeScenario?.opening_narrative && (
                 <div className="bg-white/[0.03] backdrop-blur-xl border border-white/5 rounded-[2rem] p-6 md:p-8 shadow-[0_0_40px_rgba(255,255,255,0.15)]">
                   <div className="prose prose-invert max-w-none prose-p:leading-relaxed prose-p:font-light prose-p:text-white font-serif">
-                    <ReactMarkdown>{activeScenario.opening_narrative}</ReactMarkdown>
+                    <ReactMarkdown components={mentionComponents}>{activeScenario.opening_narrative}</ReactMarkdown>
                   </div>
                 </div>
               )}
@@ -339,14 +377,17 @@ export default function GameCanvas() {
                     {isUser ? (
                       <div className={`max-w-2xl bg-white/10 backdrop-blur-md border border-white/20 text-white px-5 py-3.5 rounded-2xl rounded-tr-sm shadow-[0_4px_20px_rgba(0,0,0,0.2)] ${/^\[META\]/i.test(msg.content) ? 'font-mono' : ''}`}>
                         <p className="text-sm md:text-base font-light tracking-wide leading-relaxed">
-                          {msg.content.replace(/^\[(DO|SAY|CONTINUE|META)\]\s*/i, (match, p1) => {
-                             return `<span class="text-xs font-bold text-white uppercase mr-2 tracking-widest opacity-80">${p1}</span> `;
-                          }).split('<span').map((part, idx) => {
-                            if (idx === 0) return part;
-                            const [spanContent, ...rest] = part.split('</span>');
-                            const content = spanContent.split('>')[1];
-                            return <span key={idx}><span className="text-xs font-bold text-white uppercase mr-2 tracking-widest opacity-80">{content}</span>{rest.join('</span>')}</span>;
-                          })}
+                          {(() => {
+                            const typeMatch = msg.content.match(/^\[(DO|SAY|CONTINUE|META)\]\s*/i);
+                            const actionType = typeMatch ? typeMatch[1] : null;
+                            const body = typeMatch ? msg.content.slice(typeMatch[0].length) : msg.content;
+                            return (
+                              <>
+                                {actionType && <span className="text-xs font-bold text-white uppercase mr-2 tracking-widest opacity-80">{actionType}</span>}
+                                <MentionText>{body}</MentionText>
+                              </>
+                            );
+                          })()}
                         </p>
                       </div>
                     ) : (
@@ -359,7 +400,7 @@ export default function GameCanvas() {
                            </span>
                         </div>
                         <div className="prose prose-invert max-w-none prose-p:leading-relaxed prose-p:font-light prose-p:text-white prose-headings:text-white prose-a:text-white font-serif">
-                          <ReactMarkdown>{displayContent}</ReactMarkdown>
+                          <ReactMarkdown components={mentionComponents}>{displayContent}</ReactMarkdown>
                           {isStreaming && i === messages.length - 1 && (
                             <span className={`inline-block w-2 h-4 animate-pulse ml-2 align-middle ${combatMode ? 'bg-rose-400 shadow-[0_0_8px_rgba(244,63,94,0.8)]' : 'bg-white/10 shadow-[0_0_8px_rgba(99,102,241,0.8)]'}`} />
                           )}

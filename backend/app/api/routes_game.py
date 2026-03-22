@@ -24,6 +24,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Ensure API keys from config are available in os.environ for litellm
+if not os.environ.get("ANTHROPIC_API_KEY") and settings.anthropic_api_key:
+    os.environ["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
+if not os.environ.get("DEEPSEEK_API_KEY") and settings.deepseek_api_key:
+    os.environ["DEEPSEEK_API_KEY"] = settings.deepseek_api_key
+if not os.environ.get("OPENAI_API_KEY") and settings.openai_api_key:
+    os.environ["OPENAI_API_KEY"] = settings.openai_api_key
+
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _event_store = EventStore(os.environ.get("EVENT_DB_PATH", os.path.join(_BACKEND_DIR, "events.db")))
 _llm = LLMRouter(LLMConfig())
@@ -295,6 +303,58 @@ async def get_journal(campaign_id: str, category: str | None = None):
 async def get_npc_minds(campaign_id: str):
     minds = _npc_minds.get_all_minds(campaign_id)
     return [m.to_dict() for m in minds]
+
+
+@router.get("/{campaign_id}/characters")
+async def get_characters(campaign_id: str, q: str = ""):
+    """List all known characters/entities for @-mention autocomplete.
+
+    Returns NPCs from NpcMindEngine + entities from GraphEngine (if available).
+    Optional query parameter `q` filters by substring match.
+    """
+    characters: list[dict] = []
+    seen_names: set[str] = set()
+
+    # NPCs from mind engine (primary source — has thoughts and aliases)
+    for mind in _npc_minds.get_all_minds(campaign_id):
+        name_lower = mind.name.lower()
+        if name_lower in seen_names:
+            continue
+        seen_names.add(name_lower)
+        characters.append({
+            "name": mind.name,
+            "aliases": mind.aliases,
+            "type": "NPC",
+        })
+
+    # Entities from graph engine (if available)
+    session = _sessions.get(campaign_id)
+    if session and hasattr(session, "_graph") and session._graph:
+        try:
+            nodes = await session._graph.get_all_nodes()
+            for node in nodes:
+                name_lower = node.name.lower()
+                if name_lower in seen_names:
+                    continue
+                seen_names.add(name_lower)
+                characters.append({
+                    "name": node.name,
+                    "aliases": [],
+                    "type": node.node_type.value if hasattr(node.node_type, "value") else str(node.node_type),
+                })
+        except Exception:
+            pass
+
+    # Filter by query if provided
+    if q:
+        q_lower = q.lower()
+        characters = [
+            c for c in characters
+            if q_lower in c["name"].lower()
+            or any(q_lower in a.lower() for a in c.get("aliases", []))
+        ]
+
+    return characters
 
 
 @router.get("/{campaign_id}/memory-crystals")

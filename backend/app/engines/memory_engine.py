@@ -98,7 +98,7 @@ class MemoryEngine:
                     "Rules:\n"
                     "- ai_memory: machine-oriented structured memory for LLM context.\n"
                     "- Use this EXACT format for ai_memory:\n"
-                    "  RELATIONSHIPS: [who knows who and how they met, e.g. 'Ryuu MET Megumi Fushiguro (deep conversation about loneliness on the rooftop)']\n"
+                    "  RELATIONSHIPS: [who knows who and how they met, e.g. 'CharA MET CharB (context of meeting)']\n"
                     "  PROMISES: [agreements, pacts, deals the player made]\n"
                     "  KEY_EVENTS: [major plot points in chronological order]\n"
                     "  PLAYER_STATE: [current emotional state, goals, grudges]\n"

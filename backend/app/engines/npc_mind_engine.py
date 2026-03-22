@@ -59,21 +59,42 @@ class NpcMindEngine:
         return None
 
     def _find_fuzzy_candidates(self, campaign_id: str, name: str, threshold: float = 0.6) -> list[NpcMind]:
-        """Find existing NPCs with fuzzy-similar names."""
+        """Find existing NPCs with fuzzy-similar names.
+
+        Uses two tiers:
+        1. Substring containment — guaranteed candidate (e.g. "Gojo" in "Satoru Gojo")
+        2. Fuzzy ratio >= threshold — probable candidate
+        All candidates go through LLM confirmation.
+        """
         from difflib import SequenceMatcher
         minds = self._minds.get(campaign_id, {})
         name_lower = name.lower()
         candidates = []
+        seen_keys: set[str] = set()
         for key, mind in minds.items():
             if key == name_lower:
                 continue
-            ratio = SequenceMatcher(None, name_lower, key).ratio()
-            if ratio >= threshold:
+            # Tier 1: substring containment — guaranteed candidate
+            all_names = [key] + [a.lower() for a in mind.aliases]
+            substring_match = any(
+                name_lower in n or n in name_lower
+                for n in all_names
+                if len(n) >= 2 and len(name_lower) >= 2  # avoid single-char matches
+            )
+            if substring_match and key not in seen_keys:
                 candidates.append(mind)
+                seen_keys.add(key)
+                continue
+            # Tier 2: fuzzy ratio
+            ratio = SequenceMatcher(None, name_lower, key).ratio()
+            if ratio >= threshold and key not in seen_keys:
+                candidates.append(mind)
+                seen_keys.add(key)
             else:
                 for alias in mind.aliases:
-                    if SequenceMatcher(None, name_lower, alias.lower()).ratio() >= threshold:
+                    if SequenceMatcher(None, name_lower, alias.lower()).ratio() >= threshold and key not in seen_keys:
                         candidates.append(mind)
+                        seen_keys.add(key)
                         break
         return candidates
 
@@ -92,7 +113,7 @@ class NpcMindEngine:
                 "role": "system",
                 "content": (
                     "You determine if two character names refer to the same character in an RPG. "
-                    "Consider name order variations (e.g. 'Satoru Gojo' = 'Gojo Satoru'), "
+                    "Consider name order variations (e.g. 'FirstName LastName' = 'LastName FirstName'), "
                     "nicknames, titles, and partial names. "
                     "Answer ONLY 'YES' or 'NO'."
                 ),

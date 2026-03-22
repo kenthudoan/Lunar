@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Send } from 'lucide-react'
+import { fetchCharacters } from '../api'
+import { useGameStore } from '../store'
 
 const ACTION_TYPES = [
   { id: 'DO', label: 'Do', description: 'Perform an action' },
@@ -11,6 +13,12 @@ const ACTION_TYPES = [
 export default function ActionInput({ onSubmit, disabled }) {
   const [text, setText] = useState('')
   const [type, setType] = useState('DO')
+  const [mentionState, setMentionState] = useState(null) // { startIndex, query }
+  const [mentionResults, setMentionResults] = useState([])
+  const [mentionIndex, setMentionIndex] = useState(0)
+  const textareaRef = useRef(null)
+  const dropdownRef = useRef(null)
+  const campaignId = useGameStore((s) => s.activeCampaignId)
 
   // Listen to keyboard shortcut for continue
   useEffect(() => {
@@ -27,15 +35,96 @@ export default function ActionInput({ onSubmit, disabled }) {
     return () => window.removeEventListener('keydown', handleGlobalKey)
   }, [text, disabled, onSubmit])
 
+  // Fetch characters when mention query changes
+  useEffect(() => {
+    if (!mentionState || !campaignId) {
+      setMentionResults([])
+      return
+    }
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      try {
+        const chars = await fetchCharacters(campaignId, mentionState.query)
+        if (!cancelled) {
+          setMentionResults(chars)
+          setMentionIndex(0)
+        }
+      } catch {
+        if (!cancelled) setMentionResults([])
+      }
+    }, 100) // Small debounce
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [mentionState, campaignId])
+
+  const closeMention = useCallback(() => {
+    setMentionState(null)
+    setMentionResults([])
+    setMentionIndex(0)
+  }, [])
+
+  const insertMention = useCallback((charName) => {
+    if (!mentionState) return
+    const before = text.slice(0, mentionState.startIndex)
+    const after = text.slice(mentionState.startIndex + mentionState.query.length + 1) // +1 for @
+    const newText = `${before}@${charName}${after}`
+    setText(newText)
+    closeMention()
+    // Refocus textarea
+    setTimeout(() => textareaRef.current?.focus(), 0)
+  }, [mentionState, text, closeMention])
+
+  const handleTextChange = (e) => {
+    const value = e.target.value
+    setText(value)
+
+    // Detect @ mention trigger
+    const cursorPos = e.target.selectionStart
+    const textBeforeCursor = value.slice(0, cursorPos)
+    const atMatch = textBeforeCursor.match(/@([^\s@]*)$/)
+
+    if (atMatch) {
+      const startIndex = cursorPos - atMatch[0].length
+      setMentionState({ startIndex, query: atMatch[1] })
+    } else {
+      closeMention()
+    }
+  }
+
   const handleSubmit = (e) => {
     e.preventDefault()
+    if (mentionState && mentionResults.length > 0) return // Don't submit while picking mention
     const trimmed = text.trim()
     if (!trimmed && type !== 'CONTINUE' || disabled) return
     onSubmit(type === 'CONTINUE' ? '[CONTINUE]' : `[${type}] ${trimmed}`)
     setText('')
+    closeMention()
   }
 
   const handleKeyDown = (e) => {
+    // Handle mention dropdown navigation
+    if (mentionState && mentionResults.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setMentionIndex((prev) => Math.min(prev + 1, mentionResults.length - 1))
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setMentionIndex((prev) => Math.max(prev - 1, 0))
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        insertMention(mentionResults[mentionIndex].name)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        closeMention()
+        return
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSubmit(e)
@@ -77,22 +166,54 @@ export default function ActionInput({ onSubmit, disabled }) {
         ) : (
           <div className="flex-1 relative">
             <textarea
+              ref={textareaRef}
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={handleTextChange}
               onKeyDown={handleKeyDown}
               disabled={disabled}
               placeholder={
                 disabled
                   ? 'Receiving transmission...'
                   : type === 'DO'
-                  ? 'Input action directive...'
+                  ? 'Input action directive... (use @ to mention characters)'
                   : type === 'SAY'
-                  ? 'Input verbal communication...'
+                  ? 'Input verbal communication... (use @ to mention characters)'
                   : 'Input system command...'
               }
               rows={2}
               className="w-full bg-white/[0.03] border border-white/10 rounded-xl px-5 py-3.5 text-white placeholder-white/20 focus:outline-none focus:border-white/40 focus:bg-white/[0.05] resize-none text-sm font-light transition-all custom-scrollbar leading-relaxed"
             />
+            {/* @-mention autocomplete dropdown */}
+            {mentionState && mentionResults.length > 0 && (
+              <div
+                ref={dropdownRef}
+                className="absolute bottom-full left-0 mb-2 w-72 max-h-48 overflow-y-auto bg-lunar-900 border border-white/20 rounded-lg shadow-xl z-50"
+              >
+                {mentionResults.map((char, i) => (
+                  <button
+                    key={char.name}
+                    type="button"
+                    onClick={() => insertMention(char.name)}
+                    className={`w-full text-left px-4 py-2.5 text-sm flex items-center gap-3 transition-colors
+                      ${i === mentionIndex
+                        ? 'bg-indigo-500/20 text-white'
+                        : 'text-white/70 hover:bg-white/5 hover:text-white'
+                      }`}
+                  >
+                    <span className="text-indigo-400 text-xs font-mono shrink-0">@</span>
+                    <div className="min-w-0">
+                      <div className="font-medium truncate">{char.name}</div>
+                      {char.aliases?.length > 0 && (
+                        <div className="text-xs text-white/30 truncate">
+                          aka {char.aliases.join(', ')}
+                        </div>
+                      )}
+                    </div>
+                    <span className="ml-auto text-xs text-white/20 uppercase shrink-0">{char.type}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
         <button
