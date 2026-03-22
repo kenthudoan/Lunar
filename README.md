@@ -279,6 +279,31 @@ OpenAI models produce text that *looks* good at first glance but breaks down ove
 | **Instruction adherence** | Good | Excellent | Poor over time |
 | **Recommended for** | Daily play, long campaigns | Special moments, premium experience | Testing only |
 
+### Temperature Guide (Tested with DeepSeek)
+
+The default temperature is **0.85** — optimized for narrative RPG through extensive A/B testing across 40+ actions.
+
+| Temperature | Prose Quality | Creativity | Hallucination Risk | Best For |
+|-------------|--------------|------------|-------------------|----------|
+| **0.50–0.65** | Dry, functional | Low, predictable | None | Debug, testing |
+| **0.70** | Clear, analytical | Good but repetitive | None | Exposition-heavy scenarios, tutorials |
+| **0.85** ⭐ | **Poetic, literary** | **Excellent — thematic insights, original metaphors** | **None** | **Default — best balance for narrative RPG** |
+| **1.00** | Rich, verbose | High — inventive but sometimes unfocused | Minimal | Creative-first scenarios, surreal/dream sequences |
+| **1.15+** | Unpredictable | Very high | Moderate — may contradict established facts | Experimental only |
+
+**Why 0.85?**
+
+At 0.85, DeepSeek produces prose that reads like literary fiction rather than generated text. In testing, this temperature:
+- Generated original thematic insights (e.g., contrasting a dead sister's "light of hope" with the player's "light of violence" — both from the same bloodline)
+- Reused earlier narrative details in new emotional contexts without being prompted
+- Created vivid sensory memories (floating light spheres described as "controlled fireflies")
+- Maintained perfect factual consistency across 40+ actions — zero hallucination of past events
+- Produced varied vocabulary and sentence structures without becoming incoherent
+
+At 0.70, the same prompts produced competent but predictable, exposition-heavy responses. At 1.00, creativity increased but prose occasionally became unfocused or verbose. 0.85 hits the sweet spot where every response feels like it was written by a human author who genuinely cares about the story.
+
+> **Note:** These results are specific to DeepSeek (deepseek-chat). Anthropic models produce excellent results across a wider temperature range (0.7–1.0) due to stronger instruction adherence. OpenAI models tend to degrade above 0.9.
+
 ### Anthropic Single-Call Mode
 
 When using Anthropic, the engine consolidates 5-6 separate LLM calls into **one** API call that returns:

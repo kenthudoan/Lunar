@@ -8,7 +8,7 @@ def config():
     return LLMConfig(
         primary_provider=LLMProvider.DEEPSEEK,
         primary_model="deepseek-chat",
-        temperature=0.8,
+        temperature=0.85,
         max_tokens=2000,
     )
 

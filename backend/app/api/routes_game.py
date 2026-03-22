@@ -163,7 +163,7 @@ class PlayerActionRequest(BaseModel):
 class SettingsRequest(BaseModel):
     provider: str = "deepseek"
     model: str = "deepseek-chat"
-    temperature: float = 0.8
+    temperature: float = 0.85
     max_tokens: int = 2000
 
 

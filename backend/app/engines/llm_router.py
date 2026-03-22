@@ -52,7 +52,7 @@ class LLMConfig:
     primary_model: str = "deepseek-chat"
     fallback_provider: LLMProvider | None = None
     fallback_model: str | None = None
-    temperature: float = 0.8
+    temperature: float = 0.85
     max_tokens: int = 2000
 
     def get_context_window(self) -> int:
