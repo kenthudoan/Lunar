@@ -78,21 +78,39 @@ class NarratorEngine:
 
     @staticmethod
     def _length_instruction(max_tokens: int) -> str:
-        """Return a length constraint instruction scaled to the token budget."""
+        """Return a length constraint instruction scaled to the token budget.
+
+        Uses approximate word counts (1 token ≈ 0.6 words for Portuguese) to give the model
+        a concrete, hard-to-ignore limit for the narrative_text field only.
+        """
+        # Approximate word budget for narrative (tokens * 0.75 words/token)
+        word_budget = int(max_tokens * 0.6)
         if max_tokens <= 512:
             return (
-                "LENGTH CONSTRAINT: Keep your response very short — 1-2 paragraphs maximum. "
-                "Be concise but complete. Always end at a natural stopping point."
+                f"HARD LENGTH LIMIT: The 'narrative_text' field MUST be under {word_budget} words "
+                f"(~{max_tokens} tokens). This is 1-2 short paragraphs. "
+                "Be concise but complete. Always end at a natural stopping point. "
+                "Going over this limit is a FAILURE — trim ruthlessly."
             )
         if max_tokens <= 1000:
             return (
-                "LENGTH CONSTRAINT: Keep your response short — 2-4 paragraphs maximum. "
-                "Focus on the most important narrative beats. Always end at a natural stopping point."
+                f"HARD LENGTH LIMIT: The 'narrative_text' field MUST be under {word_budget} words "
+                f"(~{max_tokens} tokens). This is 2-4 paragraphs. "
+                "Focus on the most important narrative beats. Always end at a natural stopping point. "
+                "Going over this limit is a FAILURE — trim ruthlessly."
             )
         if max_tokens <= 1500:
             return (
-                "LENGTH CONSTRAINT: Keep your response moderate — 4-6 paragraphs maximum. "
-                "Always end at a natural stopping point with a clear prompt for the player."
+                f"HARD LENGTH LIMIT: The 'narrative_text' field MUST be under {word_budget} words "
+                f"(~{max_tokens} tokens). This is 4-6 paragraphs. "
+                "Always end at a natural stopping point with a clear prompt for the player. "
+                "Going over this limit is a FAILURE — trim ruthlessly."
+            )
+        if max_tokens <= 3000:
+            return (
+                f"LENGTH GUIDELINE: Aim for under {word_budget} words (~{max_tokens} tokens) "
+                "in the 'narrative_text' field. Write rich prose but don't ramble. "
+                "Always end at a natural stopping point."
             )
         return ""
 
@@ -327,7 +345,7 @@ class NarratorEngine:
         '  "mode": "NARRATIVE|COMBAT|META",\n'
         '  "narrative_time_seconds": <int, realistic story time this action takes>,\n'
         '  "ambush": <bool, true only if NPC attacks player by surprise>,\n'
-        '  "narrative_text": "<your full narrative prose response>",\n'
+        '  "narrative_text": "<your full narrative prose response — MUST respect the word limit from LENGTH instructions>",\n'
         '  "npc_thoughts": [{"name": "<full NPC name>", "thoughts": {"feeling": "...", "goal": "...", "opinion_of_player": "...", "secret_plan": "..."}}],\n'
         '  "entities": [{"name": "<full name>", "type": "NPC|LOCATION|FACTION|ITEM|EVENT", "attributes": {}}],\n'
         '  "relationships": [{"source": "<full name>", "target": "<full name>", "rel_type": "KNOWS|MET|ALLIED_WITH|GUARDS|LOCATED_IN|etc"}],\n'
@@ -339,7 +357,9 @@ class NarratorEngine:
         "- npc_thoughts: Only include NPCs that APPEAR or are MENTIONED in this scene.\n"
         "- entities/relationships: Extract named entities from your narrative. Use FULL canonical names.\n"
         "- world_changes: Only if significant time passes or major events affect the wider world. Empty string otherwise.\n"
-        "- The narrative_text must be complete, immersive prose — not a summary."
+        "- The narrative_text must be complete, immersive prose — not a summary.\n"
+        "- CRITICAL: The narrative_text MUST stay within the word/token limit specified in the LENGTH instructions above. "
+        "The other JSON fields (npc_thoughts, entities, etc.) do NOT count toward that limit — only narrative_text does."
     )
 
     async def complete_single_call(

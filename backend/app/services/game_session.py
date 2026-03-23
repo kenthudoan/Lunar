@@ -132,7 +132,7 @@ class GameSession:
         )
 
     def _rebuild_plot_lock_from_events(self) -> None:
-        """Rebuild plot seeds and lock from persisted events."""
+        """Rebuild plot seeds, NPC seeds, and lock from persisted events."""
         plot_events = self._event_store.get_by_type(
             self.campaign_id, EventType.PLOT_GENERATION,
         )
@@ -147,8 +147,34 @@ class GameSession:
                 if text:
                     self._active_plot_seeds.append(text)
 
-        # Check lock: count player actions after the last plot
+        # Restore pending NPC seed if the last plot event was an NPC
+        # and it hasn't been introduced yet (name not found in subsequent narratives)
         last_plot = plot_events[-1]
+        last_kind = last_plot.payload.get("kind", "")
+        if last_kind == "npc":
+            npc_data = last_plot.payload.get("data", {})
+            npc_name = npc_data.get("name", "")
+            if npc_name:
+                # Check if the NPC name appears in any narrator response after the seed
+                narrator_events = self._event_store.get_by_type(
+                    self.campaign_id, EventType.NARRATOR_RESPONSE,
+                )
+                introduced = any(
+                    npc_name.lower() in (e.payload.get("text", "") or "").lower()
+                    for e in narrator_events
+                    if e.created_at > last_plot.created_at
+                )
+                if not introduced:
+                    self._pending_npc_seed = npc_data
+                    self._pending_npc_introduced = False
+                    logger.info(
+                        "Restored pending NPC seed '%s' from events for campaign %s",
+                        npc_name, self.campaign_id,
+                    )
+                else:
+                    self._pending_npc_introduced = True
+
+        # Check lock: count player actions after the last plot
         player_events = self._event_store.get_by_type(
             self.campaign_id, EventType.PLAYER_ACTION,
         )
@@ -1133,7 +1159,9 @@ class GameSession:
             if not should_trigger:
                 continue
 
-            payload: dict
+            payload: dict | None = None
+            tone = self.scenario_tone or ""
+
             if kind == "npc":
                 # Collect existing NPC names to avoid duplicates
                 existing_names = []
@@ -1147,7 +1175,12 @@ class GameSession:
                     language=self.language,
                     recent_narrative=recent_narrative,
                     existing_npc_names=existing_names,
+                    tone_instructions=tone,
                 )
+                if npc is None:
+                    # LLM decided it doesn't make sense right now — skip
+                    logger.info("Auto-plot NPC skipped (NONE) for campaign %s", self.campaign_id)
+                    continue
                 npc_data = asdict(npc)
                 payload = {"kind": kind, "source": "auto", "data": npc_data}
                 # Store as pending NPC seed — narrator will introduce on next turn
@@ -1156,14 +1189,27 @@ class GameSession:
                 # NPC seeds are shown to the player
                 yield f"[PLOT_AUTO]{json.dumps(payload, ensure_ascii=False)}"
             elif kind == "micro_hook":
-                hook = await self._plot_generator.generate_micro_hook(safe_context, recent_narrative, language=self.language)
-                if hook.description:
-                    self._pending_micro_hook = hook.description
+                hook = await self._plot_generator.generate_micro_hook(
+                    safe_context, recent_narrative,
+                    language=self.language,
+                    tone_instructions=tone,
+                )
+                if hook is None:
+                    logger.info("Auto-plot micro_hook skipped (NONE) for campaign %s", self.campaign_id)
+                    continue
+                self._pending_micro_hook = hook.description
                 payload = {"kind": kind, "source": "auto", "data": {"text": hook.description}}
                 # Micro-hooks are NOT shown to the player — they are
                 # injected into the narrator's system prompt for the next turn
             else:  # plot_arc
-                arc = await self._plot_generator.generate_plot_arc(safe_context, language=self.language, recent_narrative=recent_narrative)
+                arc = await self._plot_generator.generate_plot_arc(
+                    safe_context, language=self.language,
+                    recent_narrative=recent_narrative,
+                    tone_instructions=tone,
+                )
+                if arc is None:
+                    logger.info("Auto-plot plot_arc skipped (NONE) for campaign %s", self.campaign_id)
+                    continue
                 self._active_plot_seeds.append(arc)
                 payload = {"kind": kind, "source": "auto", "data": {"text": arc}}
                 # Plot arcs are NOT shown to the player — they are fed to

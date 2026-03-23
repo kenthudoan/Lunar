@@ -75,9 +75,29 @@ async def test_generate_plot_arc_returns_string(generator, mock_llm):
 async def test_generate_npc_handles_malformed_json(generator, mock_llm):
     mock_llm.complete = AsyncMock(return_value="not json at all")
     npc = await generator.generate_npc(world_context="test")
-    # Should return a fallback NPC rather than crash
-    assert npc is not None
-    assert npc.name is not None
+    # Should return None (skip) rather than crash or return garbage
+    assert npc is None
+
+
+@pytest.mark.asyncio
+async def test_generate_npc_returns_none_on_none_response(generator, mock_llm):
+    mock_llm.complete = AsyncMock(return_value="NONE")
+    npc = await generator.generate_npc(world_context="test")
+    assert npc is None
+
+
+@pytest.mark.asyncio
+async def test_generate_plot_arc_returns_none_on_none_response(generator, mock_llm):
+    mock_llm.complete = AsyncMock(return_value="None")
+    arc = await generator.generate_plot_arc(world_context="test")
+    assert arc is None
+
+
+@pytest.mark.asyncio
+async def test_generate_micro_hook_returns_none_on_none_response(generator, mock_llm):
+    mock_llm.complete = AsyncMock(return_value="none")
+    hook = await generator.generate_micro_hook(world_context="test", recent_narrative="test")
+    assert hook is None
 
 
 def test_should_trigger_auto_on_first_threshold(generator):
