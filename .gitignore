@@ -32,6 +32,13 @@ backend/server.err
 start-mobile.bat
 *.bak
 
+# CLIProxyAPI binary + auth
+proxy/cliproxyapi/cli-proxy-api.exe
+proxy/cliproxyapi/cliproxyapi.zip
+proxy/cliproxyapi/LICENSE
+proxy/cliproxyapi/README.md
+proxy/cliproxyapi/README_CN.md
+
 # Temp / tool dirs
 .inference_venv/
 .playwright-mcp/

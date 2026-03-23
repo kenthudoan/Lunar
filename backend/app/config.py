@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: str = ""
     anthropic_proxy_url: str = ""
+    anthropic_proxy_key: str = "proxy"
     debug: bool = False
 
     model_config = {"env_file": [".env", "../.env"]}

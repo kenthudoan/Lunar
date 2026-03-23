@@ -69,6 +69,7 @@ class LLMConfig:
 # When ANTHROPIC_PROXY_URL is set, Anthropic requests route through the
 # Claude Max Proxy (uses Pro/Max subscription instead of API rate limits).
 _ANTHROPIC_PROXY_URL = os.environ.get("ANTHROPIC_PROXY_URL", "")
+_ANTHROPIC_PROXY_KEY = os.environ.get("ANTHROPIC_PROXY_KEY", "proxy")
 
 
 class LLMRouter:
@@ -95,7 +96,7 @@ class LLMRouter:
         call_kwargs = {**kwargs}
         if api_base:
             call_kwargs["api_base"] = api_base
-            call_kwargs["api_key"] = "proxy"  # proxy handles auth
+            call_kwargs["api_key"] = _ANTHROPIC_PROXY_KEY
         try:
             response = await litellm.acompletion(
                 model=model,
@@ -114,7 +115,7 @@ class LLMRouter:
                 fb_kwargs = {**kwargs}
                 if fb_api_base:
                     fb_kwargs["api_base"] = fb_api_base
-                    fb_kwargs["api_key"] = "proxy"
+                    fb_kwargs["api_key"] = _ANTHROPIC_PROXY_KEY
                 response = await litellm.acompletion(
                     model=fallback_model,
                     messages=messages,
@@ -133,7 +134,21 @@ class LLMRouter:
         call_kwargs = {**kwargs}
         if api_base:
             call_kwargs["api_base"] = api_base
-            call_kwargs["api_key"] = "proxy"
+            call_kwargs["api_key"] = _ANTHROPIC_PROXY_KEY
+            # CLIProxyAPI streaming adds extra fields that confuse litellm's
+            # SSE parser, so fall back to non-streaming and yield the result.
+            response = await litellm.acompletion(
+                model=model,
+                messages=messages,
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens,
+                stream=False,
+                **call_kwargs,
+            )
+            content = response.choices[0].message.content
+            if content:
+                yield content
+            return
         response = await litellm.acompletion(
             model=model,
             messages=messages,
