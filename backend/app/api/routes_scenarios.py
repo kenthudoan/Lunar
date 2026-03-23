@@ -24,8 +24,8 @@ def _get_event_store() -> EventStore:
 class CreateScenarioRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     description: str = Field(default="", max_length=2000)
-    tone_instructions: str = Field(default="", max_length=5000)
-    opening_narrative: str = Field(default="", max_length=10000)
+    tone_instructions: str = Field(default="", max_length=50000)
+    opening_narrative: str = Field(default="", max_length=50000)
     language: str = Field(default="en", max_length=10)
     lore_text: str = Field(default="", max_length=50000)
 
