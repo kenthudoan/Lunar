@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import AsyncIterator
@@ -65,6 +66,11 @@ class LLMConfig:
         return _CONTEXT_WINDOWS.get(model_key, _DEFAULT_CONTEXT_WINDOW)
 
 
+# When ANTHROPIC_PROXY_URL is set, Anthropic requests route through the
+# Claude Max Proxy (uses Pro/Max subscription instead of API rate limits).
+_ANTHROPIC_PROXY_URL = os.environ.get("ANTHROPIC_PROXY_URL", "")
+
+
 class LLMRouter:
     def __init__(self, config: LLMConfig):
         self.config = config
@@ -74,18 +80,29 @@ class LLMRouter:
             return model
         return f"{provider.value}/{model}"
 
+    def _get_api_base(self, provider: LLMProvider) -> str | None:
+        """Return custom api_base for providers that use a local proxy."""
+        if provider == LLMProvider.ANTHROPIC and _ANTHROPIC_PROXY_URL:
+            return _ANTHROPIC_PROXY_URL
+        return None
+
     async def complete(self, messages: list[dict], **kwargs) -> str:
         model = self._build_model_string(
             self.config.primary_provider, self.config.primary_model
         )
         max_tokens = kwargs.pop("max_tokens", self.config.max_tokens)
+        api_base = self._get_api_base(self.config.primary_provider)
+        call_kwargs = {**kwargs}
+        if api_base:
+            call_kwargs["api_base"] = api_base
+            call_kwargs["api_key"] = "proxy"  # proxy handles auth
         try:
             response = await litellm.acompletion(
                 model=model,
                 messages=messages,
                 temperature=self.config.temperature,
                 max_tokens=max_tokens,
-                **kwargs,
+                **call_kwargs,
             )
             return response.choices[0].message.content
         except Exception:
@@ -93,12 +110,17 @@ class LLMRouter:
                 fallback_model = self._build_model_string(
                     self.config.fallback_provider, self.config.fallback_model
                 )
+                fb_api_base = self._get_api_base(self.config.fallback_provider)
+                fb_kwargs = {**kwargs}
+                if fb_api_base:
+                    fb_kwargs["api_base"] = fb_api_base
+                    fb_kwargs["api_key"] = "proxy"
                 response = await litellm.acompletion(
                     model=fallback_model,
                     messages=messages,
                     temperature=self.config.temperature,
                     max_tokens=self.config.max_tokens,
-                    **kwargs,
+                    **fb_kwargs,
                 )
                 return response.choices[0].message.content
             raise
@@ -107,13 +129,18 @@ class LLMRouter:
         model = self._build_model_string(
             self.config.primary_provider, self.config.primary_model
         )
+        api_base = self._get_api_base(self.config.primary_provider)
+        call_kwargs = {**kwargs}
+        if api_base:
+            call_kwargs["api_base"] = api_base
+            call_kwargs["api_key"] = "proxy"
         response = await litellm.acompletion(
             model=model,
             messages=messages,
             temperature=self.config.temperature,
             max_tokens=self.config.max_tokens,
             stream=True,
-            **kwargs,
+            **call_kwargs,
         )
         async for chunk in response:
             delta = chunk.choices[0].delta.content

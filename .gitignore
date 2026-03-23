@@ -28,6 +28,10 @@ backend/tmp-debug-events.db
 backend/server.out
 backend/server.err
 
+# Mobile dev script
+start-mobile.bat
+*.bak
+
 # Temp / tool dirs
 .inference_venv/
 .playwright-mcp/

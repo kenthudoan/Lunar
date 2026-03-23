@@ -4,7 +4,7 @@ import { Settings, X } from 'lucide-react'
 
 const PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek', models: ['deepseek-chat', 'deepseek-reasoner'] },
-  { id: 'anthropic', label: 'Anthropic', models: ['claude-sonnet-4-6', 'claude-opus-4-6'] },
+  { id: 'anthropic', label: 'Anthropic', models: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-6'] },
   { id: 'openai', label: 'OpenAI', models: ['gpt-4o', 'gpt-4o-mini'] },
 ]
 
