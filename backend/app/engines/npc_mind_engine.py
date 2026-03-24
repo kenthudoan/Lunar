@@ -196,6 +196,9 @@ class NpcMindEngine:
                     "reacting, or being directly described. Do NOT skip NPCs just because others "
                     "are more prominent in the scene. If a character speaks or acts, they MUST "
                     "be included. Aim for completeness over brevity. "
+                    "Do NOT include NPCs that are only mentioned by other characters or "
+                    "referenced in memories/flashbacks — only those physically present "
+                    "and acting in the current scene. "
                     "Thoughts should reflect their personality and recent events. "
                     "Preserve NPC names exactly as they appear in the narrative."
                     + lang_hint
