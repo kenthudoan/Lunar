@@ -69,6 +69,62 @@ def _load_story_cards_for_campaign(campaign_id: str):
         logger.debug("Could not load story cards for campaign %s", campaign_id)
         return []
 
+
+def _load_scenario_for_campaign(campaign_id: str):
+    """Load scenario tone, language, and opening narrative for a campaign."""
+    try:
+        store = ScenarioStore(_SCENARIO_DB_PATH)
+        conn = store._conn
+        row = conn.execute(
+            "SELECT s.tone_instructions, s.language, s.opening_narrative "
+            "FROM scenarios s JOIN campaigns c ON c.scenario_id = s.id "
+            "WHERE c.id=?",
+            (campaign_id,),
+        ).fetchone()
+        if not row:
+            return "", "en", ""
+        return row[0] or "", row[1] or "en", row[2] or ""
+    except Exception:
+        logger.debug("Could not load scenario for campaign %s", campaign_id)
+        return "", "en", ""
+
+
+def _ensure_session(campaign_id: str) -> GameSession:
+    """Get or create a GameSession, ensuring all in-memory state is rebuilt.
+
+    This is used by GET endpoints that need rebuilt data (NPC minds, journal,
+    crystals, inventory) without requiring a player action first.
+    """
+    if campaign_id in _sessions:
+        return _sessions[campaign_id]
+
+    tone, language, opening = _load_scenario_for_campaign(campaign_id)
+    story_cards = _load_story_cards_for_campaign(campaign_id)
+    graph = _get_graph_engine(campaign_id)
+    graphiti = _get_graphiti_engine()
+    if graphiti:
+        _memory.set_graphiti(graphiti)
+
+    _sessions[campaign_id] = GameSession(
+        campaign_id=campaign_id,
+        scenario_tone=tone,
+        language=language,
+        narrator=_narrator,
+        memory=_memory,
+        world_reactor=_world_reactor,
+        journal=_journal,
+        event_store=_event_store,
+        combat_engine=_combat,
+        graph_engine=graph,
+        npc_minds=_npc_minds,
+        graphiti_engine=graphiti,
+        plot_generator=_plot_generator,
+        inventory_engine=_inventory,
+        opening_narrative=opening,
+        story_cards=story_cards,
+    )
+    return _sessions[campaign_id]
+
 _graphiti_engine = None
 
 
@@ -200,38 +256,10 @@ def _get_graph_engine(campaign_id: str):
 
 @router.post("/action")
 async def player_action(req: PlayerActionRequest):
-    if req.campaign_id not in _sessions:
-        graphiti = _get_graphiti_engine()
-        if graphiti:
-            _memory.set_graphiti(graphiti)
-        graph = _get_graph_engine(req.campaign_id)
-        if graph:
-            try:
-                await graph.initialize()
-            except Exception:
-                logger.warning("GraphEngine initialization failed", exc_info=True)
-                graph = None
-        story_cards = _load_story_cards_for_campaign(req.campaign_id)
-        _sessions[req.campaign_id] = GameSession(
-            campaign_id=req.campaign_id,
-            scenario_tone=req.scenario_tone,
-            language=req.language,
-            narrator=_narrator,
-            memory=_memory,
-            world_reactor=_world_reactor,
-            journal=_journal,
-            event_store=_event_store,
-            combat_engine=_combat,
-            graph_engine=graph,
-            npc_minds=_npc_minds,
-            graphiti_engine=graphiti,
-            plot_generator=_plot_generator,
-            inventory_engine=_inventory,
-            opening_narrative=req.opening_narrative,
-            story_cards=story_cards,
-        )
-
-    session = _sessions[req.campaign_id]
+    session = _ensure_session(req.campaign_id)
+    # Update session with request-specific values that may differ per action
+    session.scenario_tone = req.scenario_tone or session.scenario_tone
+    session.language = req.language or session.language
     # Apply user's LLM settings per-request
     try:
         _llm.config.primary_provider = LLMProvider(req.provider)
@@ -297,6 +325,7 @@ async def rewind(campaign_id: str):
 
 @router.get("/{campaign_id}/journal")
 async def get_journal(campaign_id: str, category: str | None = None):
+    _ensure_session(campaign_id)
     if category:
         try:
             cat = JournalCategory(category)
@@ -310,6 +339,7 @@ async def get_journal(campaign_id: str, category: str | None = None):
 
 @router.get("/{campaign_id}/npc-minds")
 async def get_npc_minds(campaign_id: str):
+    _ensure_session(campaign_id)
     minds = _npc_minds.get_all_minds(campaign_id)
     return [m.to_dict() for m in minds]
 
@@ -321,6 +351,7 @@ async def get_characters(campaign_id: str, q: str = ""):
     Returns NPCs from NpcMindEngine + entities from GraphEngine (if available).
     Optional query parameter `q` filters by substring match.
     """
+    _ensure_session(campaign_id)
     characters: list[dict] = []
     seen_names: set[str] = set()
 
@@ -368,6 +399,7 @@ async def get_characters(campaign_id: str, q: str = ""):
 
 @router.get("/{campaign_id}/memory-crystals")
 async def get_memory_crystals(campaign_id: str):
+    _ensure_session(campaign_id)
     crystals = _memory.get_crystals(campaign_id)
     return [
         {
@@ -461,6 +493,7 @@ async def timeskip(campaign_id: str, req: TimeskipRequest):
 
 @router.get("/{campaign_id}/inventory")
 async def get_inventory(campaign_id: str):
+    _ensure_session(campaign_id)
     items = _inventory.get_inventory(campaign_id)
     return [{"name": i.name, "category": i.category, "source": i.source, "status": i.status} for i in items]
 
