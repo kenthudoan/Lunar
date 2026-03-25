@@ -74,7 +74,7 @@ class NpcMindEngine:
         for key, mind in minds.items():
             if key == name_lower:
                 continue
-            # Tier 1: substring containment — guaranteed candidate
+            # Tier 1: substring containment — guaranteed candidate (e.g. "Gojo" in "Satoru Gojo")
             all_names = [key] + [a.lower() for a in mind.aliases]
             substring_match = any(
                 name_lower in n or n in name_lower
@@ -123,7 +123,7 @@ class NpcMindEngine:
                 "content": f"Are these the same character?\nName A: {name_a}\nName B: {name_b}{context_info}",
             },
         ]
-        raw = await self._llm.complete(messages=messages)
+        raw = await self._llm.complete(messages=messages, max_tokens=16)
         return raw.strip().upper().startswith("YES")
 
     def _ensure_mind(self, campaign_id: str, npc_name: str) -> NpcMind:
@@ -179,37 +179,59 @@ class NpcMindEngine:
         language: str = "en",
     ) -> list[NpcMind]:
         """Analyze narrative and update NPC thoughts based on recent events."""
-        lang_hint = ""
-        if language and language != "en":
-            lang_hint = f" Write all thought values in the same language as the narrative ({language})."
+        _NPC_MIND_PROMPTS = {
+            "en": (
+                "You analyze RPG narrative text and extract NPC internal thoughts. "
+                "For each NPC mentioned, determine what they are privately thinking. "
+                "Return ONLY valid JSON (no markdown): "
+                '{"npcs": [{"name": str, "thoughts": {"feeling": str, "goal": str, '
+                '"opinion_of_player": str, "secret_plan": str}}]}. '
+                "Include ALL NPCs that actively appear in the narrative — speaking, acting, "
+                "reacting, observing, or being directly described. Also include NPCs that are "
+                "physically present in the scene even if they are silent observers — their "
+                "internal reaction to what is happening matters. Do NOT skip NPCs just because "
+                "others are more prominent in the scene. Aim for completeness over brevity. "
+                "Do NOT include NPCs that are only mentioned by other characters or "
+                "referenced in memories/flashbacks — only those physically present "
+                "in the current scene. "
+                "Thoughts should reflect their personality and recent events. "
+                "Preserve NPC names exactly as they appear in the narrative."
+            ),
+            "pt-br": (
+                "Você analisa texto narrativo de RPG e extrai os pensamentos internos dos NPCs. "
+                "Para cada NPC mencionado, determine o que eles estão pensando em privado. "
+                "Retorne APENAS JSON válido (sem markdown): "
+                '{"npcs": [{"name": str, "thoughts": {"feeling": str, "goal": str, '
+                '"opinion_of_player": str, "secret_plan": str}}]}. '
+                "Inclua TODOS os NPCs que aparecem ativamente na narrativa — falando, agindo, "
+                "reagindo, observando, ou sendo diretamente descritos. Também inclua NPCs que "
+                "estão fisicamente presentes na cena mesmo que sejam observadores silenciosos — "
+                "a reação interna deles ao que está acontecendo importa. NÃO pule NPCs só porque "
+                "outros são mais proeminentes na cena. Priorize completude sobre brevidade. "
+                "NÃO inclua NPCs que são apenas mencionados por outros personagens ou "
+                "referenciados em memórias/flashbacks — apenas aqueles fisicamente presentes "
+                "na cena atual. "
+                "Os pensamentos devem refletir a personalidade deles e eventos recentes. "
+                "Preserve os nomes dos NPCs exatamente como aparecem na narrativa. "
+                "Escreva todos os valores de pensamento em português brasileiro."
+            ),
+        }
+
+        prompt_text = _NPC_MIND_PROMPTS.get(language, _NPC_MIND_PROMPTS["en"])
+        if language and language != "en" and language not in _NPC_MIND_PROMPTS:
+            prompt_text += f" Write all thought values in the same language as the narrative ({language})."
 
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "You analyze RPG narrative text and extract NPC internal thoughts. "
-                    "For each NPC mentioned, determine what they are privately thinking. "
-                    "Return ONLY valid JSON (no markdown): "
-                    '{"npcs": [{"name": str, "thoughts": {"feeling": str, "goal": str, '
-                    '"opinion_of_player": str, "secret_plan": str}}]}. '
-                    "Include ALL NPCs that actively appear in the narrative — speaking, acting, "
-                    "reacting, or being directly described. Do NOT skip NPCs just because others "
-                    "are more prominent in the scene. If a character speaks or acts, they MUST "
-                    "be included. Aim for completeness over brevity. "
-                    "Do NOT include NPCs that are only mentioned by other characters or "
-                    "referenced in memories/flashbacks — only those physically present "
-                    "and acting in the current scene. "
-                    "Thoughts should reflect their personality and recent events. "
-                    "Preserve NPC names exactly as they appear in the narrative."
-                    + lang_hint
-                ),
+                "content": prompt_text,
             },
             {
                 "role": "user",
                 "content": f"World context:\n{world_context}\n\nRecent narrative:\n{narrative_text}",
             },
         ]
-        raw = await self._llm.complete(messages=messages)
+        raw = await self._llm.complete(messages=messages, max_tokens=4096)
         updated = []
         data = parse_json_dict(raw) or {}
         for npc_data in data.get("npcs", []):

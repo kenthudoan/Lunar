@@ -1,8 +1,15 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.config import settings
+
+if settings.debug:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
 from app.api.routes_scenarios import router as scenarios_router
 from app.api.routes_game import router as game_router, _llm
 from app.engines.llm_router import LLMConfig, LLMProvider

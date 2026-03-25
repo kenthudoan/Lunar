@@ -49,7 +49,7 @@ class CombatEngine:
             },
             {"role": "user", "content": action},
         ]
-        raw = await self._llm.complete(messages=messages)
+        raw = await self._llm.complete(messages=messages, max_tokens=256)
         data = parse_json_dict(raw)
         if not data:
             return AntiGriefingResult(rejected=False)
@@ -95,7 +95,7 @@ class CombatEngine:
                 ),
             },
         ]
-        raw = await self._llm.complete(messages=messages)
+        raw = await self._llm.complete(messages=messages, max_tokens=256)
         data = parse_json_dict(raw)
         if not data:
             coherence = creativity = context = 5.0

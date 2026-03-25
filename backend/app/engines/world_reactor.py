@@ -90,7 +90,7 @@ class WorldReactor:
             },
         ]
         try:
-            return await self._llm.complete(messages=messages)
+            return await self._llm.complete(messages=messages, max_tokens=512)
         except Exception:
             return self._fallback_world_change(tick_type, time_desc)
 

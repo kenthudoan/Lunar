@@ -121,7 +121,7 @@ class MemoryEngine:
         ai_content = ""
         player_summary = ""
         try:
-            raw = await self._llm.complete(messages=prompt)
+            raw = await self._llm.complete(messages=prompt, max_tokens=2048)
             parsed = parse_json_dict(raw)
             if parsed:
                 ai_content = str(parsed.get("ai_memory", "")).strip()

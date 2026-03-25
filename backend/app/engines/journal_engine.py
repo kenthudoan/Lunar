@@ -56,7 +56,7 @@ class JournalEngine:
             {"role": "user", "content": narrative_text},
         ]
         try:
-            raw = await self._llm.complete(messages=messages)
+            raw = await self._llm.complete(messages=messages, max_tokens=256)
             data = parse_json_dict(raw)
         except Exception:
             data = None

@@ -23,7 +23,7 @@ IF EXIST "%PROXY_DIR%\cli-proxy-api.exe" (
 
 REM Open backend in new terminal
 echo [3/4] Starting backend on http://localhost:8000 ...
-start "Project Lunar - Backend" cmd /k "cd /d "%~dp0backend" && venv\Scripts\activate && uvicorn app.main:app --reload --port 8000"
+start "Project Lunar - Backend" cmd /k "cd /d "%~dp0backend" && venv\Scripts\activate && uvicorn app.main:app --reload --port 8000 --log-level debug"
 
 REM Small delay so backend starts first
 timeout /t 3 /nobreak >nul

@@ -51,7 +51,7 @@ class NarratorEngine:
             {"role": "user", "content": player_input},
         ]
         try:
-            raw = await self._llm.complete(messages=messages)
+            raw = await self._llm.complete(messages=messages, max_tokens=256)
         except Exception:
             return self._heuristic_detect_mode(player_input)
 
@@ -114,10 +114,8 @@ class NarratorEngine:
             )
         return ""
 
-    def _build_narrator_rules(self, max_tokens: int) -> str:
-        """Build the static narrator rules block (same for all actions in a scenario)."""
-        length_instruction = self._length_instruction(max_tokens)
-        return (
+    _NARRATOR_RULES = {
+        "en": (
             "\nNARRATOR RULES:\n"
             "- Write immersive, evocative prose. Never break character.\n"
             "- React meaningfully to player choices. Consequences are real.\n"
@@ -128,15 +126,43 @@ class NarratorEngine:
             "- Do NOT summarize. Narrate in present tense.\n"
             "- End each response at a natural pause, not mid-action.\n"
             "- ALWAYS finish your response with a complete sentence. Never stop mid-word or mid-sentence.\n"
-            + (f"- {length_instruction}\n" if length_instruction else "")
-            + "- When the player ACQUIRES an item, emit: [ITEM_ADD:item_name|category|source_description]\n"
+            "{length_instruction}"
+            "- When the player ACQUIRES an item, emit: [ITEM_ADD:item_name|category|source_description]\n"
             "- When an item is CONSUMED or EXPENDED, emit: [ITEM_USE:item_name]\n"
             "- When an item is LOST, STOLEN, or DESTROYED, emit: [ITEM_LOSE:item_name]\n"
             "- Categories: weapon, armor, consumable, quest, tool, misc\n"
             "- If the player tries to use an item NOT in their inventory, reject the action narratively.\n"
             "- Place item tags at the end of the relevant sentence, inline with the narrative.\n"
-            "- IMPORTANT: If you mention an item from the WORLD LORE / story cards that the player is carrying or using for the FIRST TIME in the story (e.g. a keepsake, a weapon described in the scenario), emit [ITEM_ADD] for it so it appears in the inventory. Story card items that the player already has but haven't been registered yet MUST be tagged."
-        )
+            "- IMPORTANT: If you mention an item from the WORLD LORE / story cards that the player is carrying or using for the FIRST TIME in the story (e.g. a keepsake, a weapon described in the scenario), emit [ITEM_ADD] for it so it appears in the inventory. Story card items that the player already has but haven't been registered yet MUST be tagged.\n"
+        ),
+        "pt-br": (
+            "\nREGRAS DO NARRADOR:\n"
+            "- Escreva prosa imersiva e evocativa. Nunca quebre o personagem.\n"
+            "- Reaja de forma significativa às escolhas do jogador. Consequências são reais.\n"
+            "- O mundo é vivo — NPCs têm suas próprias agendas e memórias.\n"
+            "- SEMPRE use nomes COMPLETOS dos personagens (nome + sobrenome) na narração. Nomes curtos são permitidos apenas em diálogos falados pelos personagens, mas a narração em si deve usar nomes completos.\n"
+            "- Ao mencionar um personagem pelo nome na narração, prefixe com @ (ex: @Satoru Gojo). Isso se aplica a TODOS os personagens e NPCs nomeados. NÃO use @ em falas de diálogo dos personagens, apenas no texto narrativo.\n"
+            "- Mantenha consistência com o tom estabelecido.\n"
+            "- NÃO resuma. Narre no tempo presente.\n"
+            "- Termine cada resposta em uma pausa natural, não no meio de uma ação.\n"
+            "- SEMPRE termine sua resposta com uma frase completa. Nunca pare no meio de uma palavra ou frase.\n"
+            "{length_instruction}"
+            "- Quando o jogador ADQUIRIR um item, emita: [ITEM_ADD:nome_item|categoria|descrição_origem]\n"
+            "- Quando um item for CONSUMIDO ou GASTO, emita: [ITEM_USE:nome_item]\n"
+            "- Quando um item for PERDIDO, ROUBADO ou DESTRUÍDO, emita: [ITEM_LOSE:nome_item]\n"
+            "- Categorias: weapon, armor, consumable, quest, tool, misc\n"
+            "- Se o jogador tentar usar um item que NÃO está no inventário, rejeite a ação narrativamente.\n"
+            "- Coloque as tags de item no final da frase relevante, inline com a narrativa.\n"
+            "- IMPORTANTE: Se você mencionar um item do WORLD LORE / story cards que o jogador está carregando ou usando PELA PRIMEIRA VEZ na história (ex: um amuleto, uma arma descrita no cenário), emita [ITEM_ADD] para que apareça no inventário. Itens de story cards que o jogador já possui mas ainda não foram registrados DEVEM ser taggeados.\n"
+        ),
+    }
+
+    def _build_narrator_rules(self, max_tokens: int, language: str = "en") -> str:
+        """Build the static narrator rules block in the appropriate language."""
+        length_instruction = self._length_instruction(max_tokens)
+        length_line = f"- {length_instruction}\n" if length_instruction else ""
+        template = self._NARRATOR_RULES.get(language, self._NARRATOR_RULES["en"])
+        return template.format(length_instruction=length_line)
 
     def build_system_prompt(
         self,
@@ -175,7 +201,7 @@ class NarratorEngine:
         if story_cards_context:
             sections.append(f"\n{story_cards_context}")
 
-        sections.append(self._build_narrator_rules(max_tokens))
+        sections.append(self._build_narrator_rules(max_tokens, language))
         return "\n".join(sections)
 
     def build_system_prompt_parts(
@@ -209,7 +235,7 @@ class NarratorEngine:
         ]
         if tone_instructions:
             static_sections.append(f"\nTONE AND STYLE:\n{tone_instructions}")
-        static_sections.append(self._build_narrator_rules(max_tokens))
+        static_sections.append(self._build_narrator_rules(max_tokens, language))
         static_part = "\n".join(static_sections)
 
         # Dynamic: changes every action

@@ -323,6 +323,7 @@ class GameSession:
     _STORY_CARDS_CONTEXT_FRACTION = 0.15  # 15% of context window
     _STORY_CARDS_MIN_BUDGET = 4_000       # floor: always allow at least 4k tokens
     _STORY_CARDS_MAX_BUDGET = 40_000      # ceiling: never exceed 40k even on 1M windows
+    _STORY_CARDS_MAX_COUNT = 50           # hard cap on number of cards regardless of budget
 
     # Bonus scores for card relevance ranking
     _LORE_BONUS = 100         # LORE cards (world rules) always rank highest
@@ -446,6 +447,10 @@ class GameSession:
         skipped = 0
 
         for score, _idx, card in scored_cards:
+            if included >= self._STORY_CARDS_MAX_COUNT:
+                skipped += len(scored_cards) - included - skipped
+                break
+
             content = card.content if isinstance(card.content, dict) else {}
             card_type = getattr(card, "card_type", "UNKNOWN")
             if hasattr(card_type, "value"):
@@ -744,7 +749,7 @@ class GameSession:
                 ),
             )
 
-        # Stream narrative from LLM with auto-continuation on truncation
+        # Collect full response before sending to frontend (no streaming)
         context_window = self._get_context_window()
         full_response = ""
         async for chunk in self._narrator.stream_narrative(
@@ -752,7 +757,6 @@ class GameSession:
             context_window=context_window,
         ):
             full_response += chunk
-            yield chunk
 
         # Auto-continuation: if the response was truncated mid-sentence,
         # ask the LLM to finish instead of just trimming.
@@ -762,7 +766,6 @@ class GameSession:
                 "Do NOT repeat any text. Complete the current sentence and paragraph, "
                 "then end at a natural pause point. Keep the same tone and language."
             )
-            # Add partial response to history temporarily for continuation
             continuation_history = self._history + [
                 {"role": "user", "content": player_input},
                 {"role": "assistant", "content": full_response},
@@ -772,16 +775,14 @@ class GameSession:
                 context_window=context_window,
             ):
                 full_response += chunk
-                yield chunk
 
-        # Final cleanup: trim any remaining truncation after continuation attempt
+        # Final cleanup: trim truncation and fix number spacing
         cleaned = self._clean_truncated_response(full_response)
-        # Fix numbers glued to words (common LLM output artifact)
         cleaned = self._fix_number_spacing(cleaned)
-        if cleaned != full_response:
-            # Tell the frontend to replace the displayed text with the clean version
-            yield f"[TRUNCATE_CLEAN]{cleaned}"
         full_response = cleaned
+
+        # Send the clean narrative to frontend (all at once)
+        yield full_response
 
         # Process inventory tags from response
         clean_response = full_response
@@ -1198,6 +1199,7 @@ class GameSession:
 
     async def _post_narrative_pipeline(self, clean_response: str) -> AsyncIterator[str]:
         """Run all post-narrative side effects: NPC minds, graph, memory, graphiti."""
+        logger.info("_post_narrative_pipeline: starting (response %d chars)", len(clean_response))
         await self._update_npc_minds(clean_response)
         await self._extract_to_graph(clean_response)
 
@@ -1209,7 +1211,11 @@ class GameSession:
 
     async def _update_npc_minds(self, narrative_text: str) -> None:
         if not self._npc_minds or not narrative_text:
+            logger.warning("_update_npc_minds skipped: npc_minds=%s, narrative_len=%d",
+                           bool(self._npc_minds), len(narrative_text) if narrative_text else 0)
             return
+        logger.info("_update_npc_minds: starting for campaign %s (narrative %d chars)",
+                    self.campaign_id, len(narrative_text))
         try:
             if self._graphiti:
                 world_ctx = await self._memory.build_context_window_async(self.campaign_id)
@@ -1564,7 +1570,7 @@ class GameSession:
             },
             {"role": "user", "content": narrative_text},
         ]
-        raw = await self._narrator._llm.complete(messages=messages)
+        raw = await self._narrator._llm.complete(messages=messages, max_tokens=2048)
         data = parse_json_dict(raw)
         if not data:
             return
