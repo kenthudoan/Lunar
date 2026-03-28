@@ -73,6 +73,8 @@ class GameSession:
 
         # Player power level (0-10), initialized from scenario or events
         self._player_power: int = self._init_player_power()
+        # Known opponent power levels — persisted from previous combats
+        self._known_opponent_powers: dict[str, int] = {}
 
         # Rebuild conversation history from persisted events so the AI
         # has full context even after a server restart or new session.
@@ -82,6 +84,7 @@ class GameSession:
         self._rebuild_journal_from_events()
         self._rebuild_memory_crystals()
         self._rebuild_player_power()
+        self._rebuild_known_opponent_powers()
 
         # If this is a brand-new campaign (no history) and we have an
         # opening narrative, seed the history so the AI knows the story setup.
@@ -245,6 +248,7 @@ class GameSession:
         self._rebuild_journal_from_events()
         self._rebuild_memory_crystals()
         self._rebuild_player_power()
+        self._rebuild_known_opponent_powers()
 
     def _rebuild_journal_from_events(self) -> None:
         """Rebuild the journal in-memory state from JOURNAL_ENTRY events in the store."""
@@ -363,6 +367,18 @@ class GameSession:
                     pass
         self._player_power_initialized = len(events) > 0
 
+    def _rebuild_known_opponent_powers(self) -> None:
+        """Rebuild known opponent power levels from COMBAT_RESULT events."""
+        self._known_opponent_powers.clear()
+        combat_events = self._event_store.get_by_type(
+            self.campaign_id, EventType.COMBAT_RESULT,
+        )
+        for ev in combat_events:
+            name = ev.payload.get("opponent_name", "")
+            power = ev.payload.get("opponent_power")
+            if name and power is not None:
+                self._known_opponent_powers[name.lower()] = int(power)
+
     async def _ensure_player_power(self) -> None:
         """If player power was never evaluated, run a full-context LLM analysis.
 
@@ -409,7 +425,7 @@ class GameSession:
                     "Return ONLY JSON: {\"power\": int, \"reason\": str}. "
                     "power must be 0-10, calibrated against the NPC power scale below.\n\n"
                     + power_scale
-                    + "\n\nSCENARIO CONTEXT:\n" + (self.scenario_tone or "")[:500]
+                    + "\n\nSCENARIO CONTEXT:\n" + (self.scenario_tone or "")[:8000]
                 ),
             },
             {
@@ -454,16 +470,28 @@ class GameSession:
         self._player_power_initialized = True
 
     def _resolve_opponent_power(self, opponent_name: str, llm_estimate: int) -> int:
-        """Resolve opponent power: check story cards first, fall back to LLM estimate."""
+        """Resolve opponent power with priority: story cards > previous combats > LLM estimate."""
         if not opponent_name:
             return llm_estimate
 
         name_lower = opponent_name.lower()
+
+        # 1. Check story cards (named NPCs with defined power)
         for card in self._story_cards:
             if hasattr(card, 'card_type') and getattr(card.card_type, 'value', str(card.card_type)).upper() == "NPC":
                 if card.name.lower() == name_lower or name_lower in card.name.lower():
                     power = card.content.get("power_level", llm_estimate) if isinstance(card.content, dict) else llm_estimate
                     return max(1, min(10, int(power)))
+
+        # 2. Check previous combats (same or similar opponent type)
+        if name_lower in self._known_opponent_powers:
+            return self._known_opponent_powers[name_lower]
+        # Fuzzy: check if any known opponent name contains or is contained by this name
+        for known_name, known_power in self._known_opponent_powers.items():
+            if known_name in name_lower or name_lower in known_name:
+                return known_power
+
+        # 3. Fall back to LLM estimate
         return max(1, min(10, llm_estimate))
 
     async def _evaluate_power_update(self, narrative: str, player_input: str) -> dict | None:
@@ -495,7 +523,7 @@ class GameSession:
                 "role": "user",
                 "content": (
                     f"Player action: {player_input}\n"
-                    f"Narrative result: {narrative[:500]}"
+                    f"Narrative result: {narrative[:8000]}"
                 ),
             },
         ]
@@ -1142,6 +1170,8 @@ class GameSession:
                     location="current",
                     entities=["player"],
                 )
+                if combat_opponent_name:
+                    self._known_opponent_powers[combat_opponent_name.lower()] = combat_npc_power
 
                 yield (
                     f"[Combat: {combat_opponent_name} (power {combat_npc_power}) "
@@ -1624,7 +1654,7 @@ class GameSession:
         recent_narrative = ""
         for msg in reversed(self._history):
             if msg["role"] == "assistant":
-                recent_narrative = msg["content"][:500]
+                recent_narrative = msg["content"][:8000]
                 break
 
         # Only one auto-trigger per turn to avoid noisy output.
@@ -1767,6 +1797,8 @@ class GameSession:
                 location="current",
                 entities=["player"],
             )
+            if opponent_name:
+                self._known_opponent_powers[opponent_name.lower()] = npc_power
 
             # Prepend outcome hint for narrator
             outcome_hint = (
