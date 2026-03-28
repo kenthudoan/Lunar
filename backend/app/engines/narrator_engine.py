@@ -34,18 +34,27 @@ class NarratorEngine:
     def __init__(self, llm):
         self._llm = llm
 
-    async def detect_mode(self, player_input: str) -> tuple[NarrativeMode, dict]:
+    async def detect_mode(self, player_input: str, story_context: str = "") -> tuple[NarrativeMode, dict]:
+        context_hint = ""
+        if story_context:
+            context_hint = f" Recent story context: {story_context}"
         messages = [
             {
                 "role": "system",
                 "content": (
                     "Classify the player's action and return ONLY JSON: "
-                    '{"mode": "NARRATIVE|COMBAT|META", "ambush": bool, "narrative_time_seconds": int}. '
+                    '{"mode": "NARRATIVE|COMBAT|META", "ambush": bool, "narrative_time_seconds": int, '
+                    '"opponent_name": str, "opponent_power": int}. '
                     "COMBAT: action initiates or continues a fight. "
                     "META: player speaks to the AI narrator directly (out of character). "
                     "NARRATIVE: everything else (exploration, dialogue, travel, etc.). "
                     "ambush: true ONLY if an NPC attacks the player by surprise (not player-initiated). "
-                    "narrative_time_seconds: realistic story time this action takes in seconds."
+                    "narrative_time_seconds: realistic story time this action takes in seconds. "
+                    "opponent_name: if COMBAT, the name or description of the opponent being fought (e.g. 'Kael Noir', 'four-legged creature', 'bandit'). Empty string if not COMBAT. "
+                    "opponent_power: if COMBAT, estimate the opponent's power level 1-10 based on context "
+                    "(1=helpless, 2-3=weak creature/civilian, 4-5=trained fighter, 6-7=elite warrior, "
+                    "8-9=legendary/boss, 10=godlike). Use 5 if uncertain. 0 if not COMBAT."
+                    + context_hint
                 ),
             },
             {"role": "user", "content": player_input},
@@ -70,10 +79,18 @@ class NarratorEngine:
         except (TypeError, ValueError):
             seconds = 60
 
+        opponent_name = str(data.get("opponent_name", "")).strip()
+        try:
+            opponent_power = max(1, min(10, int(data.get("opponent_power", 5))))
+        except (TypeError, ValueError):
+            opponent_power = 5
+
         return mode, {
             "mode": mode.value,
             "ambush": bool(data.get("ambush", False)),
             "narrative_time_seconds": seconds,
+            "opponent_name": opponent_name,
+            "opponent_power": opponent_power,
         }
 
     @staticmethod

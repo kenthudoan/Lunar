@@ -19,6 +19,7 @@ class EventType(str, Enum):
     MEMORY_CRYSTAL = "MEMORY_CRYSTAL"
     TIMESKIP = "TIMESKIP"
     INVENTORY = "INVENTORY"
+    POWER_LEVEL_UPDATE = "POWER_LEVEL_UPDATE"
 
 
 _EventBase = namedtuple(
@@ -213,6 +214,28 @@ class EventStore:
             )
             self._conn.commit()
             return cursor.rowcount
+
+    def delete_npc_thoughts(self, campaign_id: str, npc_name: str) -> int:
+        """Delete all NPC_THOUGHT events for a specific NPC name."""
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM events WHERE campaign_id=? AND event_type=? AND json_extract(payload, '$.name')=?",
+                (campaign_id, EventType.NPC_THOUGHT.value, npc_name),
+            )
+            self._conn.commit()
+            return cursor.rowcount
+
+    def upsert_npc_thought(self, campaign_id: str, npc_name: str, thoughts: dict, aliases: list[str] | None = None) -> None:
+        """Replace the latest NPC_THOUGHT event for an NPC with updated data."""
+        self.delete_npc_thoughts(campaign_id, npc_name)
+        self.append(
+            campaign_id=campaign_id,
+            event_type=EventType.NPC_THOUGHT,
+            payload={"name": npc_name, "thoughts": thoughts, "aliases": aliases or []},
+            narrative_time_delta=0,
+            location="",
+            entities=[],
+        )
 
     def delete_by_campaign(self, campaign_id: str) -> int:
         """Delete all events for a campaign. Returns the number of deleted rows."""

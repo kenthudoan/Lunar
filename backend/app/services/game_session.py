@@ -71,6 +71,9 @@ class GameSession:
         self._PLOT_CONSUME_TURNS = 4  # minimum turns before a plot is considered consumed
         self._PLOT_MIN_CONSUME_TURNS = 2  # minimum turns even if confirmed in narrative
 
+        # Player power level (0-10), initialized from scenario or events
+        self._player_power: int = self._init_player_power()
+
         # Rebuild conversation history from persisted events so the AI
         # has full context even after a server restart or new session.
         self._rebuild_history_from_events()
@@ -78,6 +81,7 @@ class GameSession:
         self._rebuild_plot_lock_from_events()
         self._rebuild_journal_from_events()
         self._rebuild_memory_crystals()
+        self._rebuild_player_power()
 
         # If this is a brand-new campaign (no history) and we have an
         # opening narrative, seed the history so the AI knows the story setup.
@@ -300,6 +304,111 @@ class GameSession:
             self._memory._last_crystal_cursor[self.campaign_id] = crystals[-1].source_end_created_at
         else:
             self._memory._last_crystal_cursor.pop(self.campaign_id, None)
+
+    def _init_player_power(self) -> int:
+        """Derive initial player power from scenario story cards.
+
+        Looks at the scenario's tone/lore for hints. Defaults to 3 (beginner adventurer).
+        """
+        tone = (self.scenario_tone or "").lower()
+        if any(w in tone for w in ("legendary", "godlike", "overpowered", "lendário")):
+            return 7
+        if any(w in tone for w in ("veteran", "experienced", "experiente", "veterano")):
+            return 5
+        if any(w in tone for w in ("weak", "helpless", "fraco", "indefeso")):
+            return 1
+        return 3
+
+    def _rebuild_player_power(self) -> None:
+        """Rebuild player power from the latest POWER_LEVEL_UPDATE event."""
+        events = self._event_store.get_by_type(
+            self.campaign_id, EventType.POWER_LEVEL_UPDATE,
+        )
+        if events:
+            latest = events[-1]
+            target = latest.payload.get("target", "")
+            if target == "player":
+                try:
+                    self._player_power = max(0, min(10, int(latest.payload.get("new_power", self._player_power))))
+                except (TypeError, ValueError):
+                    pass
+
+    def _resolve_opponent_power(self, opponent_name: str, llm_estimate: int) -> int:
+        """Resolve opponent power: check story cards first, fall back to LLM estimate."""
+        if not opponent_name:
+            return llm_estimate
+
+        name_lower = opponent_name.lower()
+        for card in self._story_cards:
+            if hasattr(card, 'card_type') and str(card.card_type).upper() == "NPC":
+                if card.name.lower() == name_lower or name_lower in card.name.lower():
+                    power = card.content.get("power_level", llm_estimate) if isinstance(card.content, dict) else llm_estimate
+                    return max(1, min(10, int(power)))
+        return max(1, min(10, llm_estimate))
+
+    async def _evaluate_power_update(self, narrative: str, player_input: str) -> dict | None:
+        """Ask the LLM if the player's power level should change based on what just happened.
+
+        Embedded as a lightweight check — only updates when narratively significant.
+        Returns the power change dict if updated, None otherwise.
+        """
+        if not self._combat:
+            return None
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You evaluate whether a player's power level should change after a story event. "
+                    "Return ONLY JSON: "
+                    '{"should_update": bool, "new_power": int, "reason": str}. '
+                    f"Current player power: {self._player_power}/10. "
+                    "Power ONLY changes with important story events — should_update=false for everything else. "
+                    "Examples that DO change power: acquiring a legendary weapon, completing intense training, "
+                    "absorbing magical energy, suffering a crippling injury, losing a power source. "
+                    "Examples that do NOT change power: regular combat wins/losses, minor discoveries, "
+                    "conversations, exploration, using items, resting. "
+                    "Maximum change per event: ±1 (except truly extraordinary events: ±2). "
+                    "new_power must be 0-10."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Player action: {player_input}\n"
+                    f"Narrative result: {narrative[:500]}"
+                ),
+            },
+        ]
+        try:
+            raw = await self._combat._llm.complete(messages=messages, max_tokens=128)
+            data = parse_json_dict(raw)
+            if data and data.get("should_update"):
+                new_power = max(0, min(10, int(data.get("new_power", self._player_power))))
+                if new_power != self._player_power:
+                    old_power = self._player_power
+                    self._player_power = new_power
+                    reason = str(data.get("reason", ""))
+                    self._event_store.append(
+                        campaign_id=self.campaign_id,
+                        event_type=EventType.POWER_LEVEL_UPDATE,
+                        payload={
+                            "target": "player",
+                            "old_power": old_power,
+                            "new_power": new_power,
+                            "reason": reason,
+                        },
+                        narrative_time_delta=0,
+                        location="current",
+                        entities=["player"],
+                    )
+                    logger.info(
+                        "Player power updated: %d -> %d (%s)",
+                        old_power, new_power, reason,
+                    )
+                    return {"old_power": old_power, "new_power": new_power, "reason": reason}
+        except Exception:
+            logger.warning("Power level evaluation failed", exc_info=True)
+        return None
 
     def _is_single_call_provider(self) -> bool:
         """Single-call mode disabled — all providers use the streaming path.
@@ -543,7 +652,8 @@ class GameSession:
                 yield chunk
             return
 
-        mode, meta = await self._narrator.detect_mode(player_input)
+        story_ctx = self._history[-1]["content"][:300] if self._history else ""
+        mode, meta = await self._narrator.detect_mode(player_input, story_context=story_ctx)
         mode = self._coerce_mode(mode)
         narrative_time = meta.get("narrative_time_seconds", 60)
         if mode != NarrativeMode.META:
@@ -669,7 +779,7 @@ class GameSession:
             logger.warning("Failed to build graph relationship summary", exc_info=True)
             return ""
 
-    async def _handle_narrative(self, player_input: str, mode: NarrativeMode = NarrativeMode.NARRATIVE, combat_outcome: str = "") -> AsyncIterator[str]:
+    async def _handle_narrative(self, player_input: str, mode: NarrativeMode = NarrativeMode.NARRATIVE, combat_outcome: str = "", combat_opponent_name: str = "", combat_npc_power: int = 5) -> AsyncIterator[str]:
         if self._graphiti:
             memory_ctx = await self._memory.build_context_window_async(self.campaign_id)
         else:
@@ -707,7 +817,12 @@ class GameSession:
                 # Do NOT mark as introduced yet — we verify after the narrative response
 
             if combat_outcome:
-                narrator_hints += self._build_combat_narrator_hint(combat_outcome)
+                narrator_hints += self._build_combat_narrator_hint(
+                    combat_outcome,
+                    opponent_name=combat_opponent_name,
+                    opponent_power=combat_npc_power,
+                    player_power=self._player_power,
+                )
 
             graph_ctx = await self.get_graph_relationship_summary()
 
@@ -820,7 +935,8 @@ class GameSession:
     async def _process_action_single_call(self, player_input: str, max_tokens: int) -> AsyncIterator[str]:
         """Single LLM call mode for Anthropic: narrative + mode + NPCs + entities in one request."""
         # Detect mode first so combat pipeline runs before the main LLM call
-        mode, meta = await self._narrator.detect_mode(player_input)
+        story_ctx = self._history[-1]["content"][:300] if self._history else ""
+        mode, meta = await self._narrator.detect_mode(player_input, story_context=story_ctx)
         mode = self._coerce_mode(mode)
         narrative_time = meta.get("narrative_time_seconds", 60)
         if mode != NarrativeMode.META:
@@ -851,6 +967,8 @@ class GameSession:
         # Combat pipeline: anti-griefing, evaluate, roll (same as streaming path)
         combat_outcome = ""
         combat_quality = 0.0
+        combat_opponent_name = ""
+        combat_npc_power = 5
         if mode == NarrativeMode.COMBAT and self._combat:
             try:
                 griefing = await self._combat.anti_griefing_check(player_input, language=self.language)
@@ -869,26 +987,37 @@ class GameSession:
                     )
                     return
 
-                npc_power = 5
+                combat_opponent_name = meta.get("opponent_name", "opponent")
+                llm_estimate = meta.get("opponent_power", 5)
+                combat_npc_power = self._resolve_opponent_power(combat_opponent_name, llm_estimate)
                 evaluation = await self._combat.evaluate_action(
                     action=player_input,
-                    npc_name="opponent",
-                    npc_power=npc_power,
+                    npc_name=combat_opponent_name or "opponent",
+                    npc_power=combat_npc_power,
                 )
-                outcome = self._combat.roll_outcome(evaluation.final_quality, npc_power)
+                outcome = self._combat.roll_outcome(evaluation.final_quality, combat_npc_power)
                 combat_outcome = outcome.value if hasattr(outcome, "value") else str(outcome)
                 combat_quality = evaluation.final_quality
 
                 self._event_store.append(
                     campaign_id=self.campaign_id,
                     event_type=EventType.COMBAT_RESULT,
-                    payload={"outcome": combat_outcome, "quality": combat_quality},
+                    payload={
+                        "outcome": combat_outcome,
+                        "quality": combat_quality,
+                        "opponent_name": combat_opponent_name,
+                        "opponent_power": combat_npc_power,
+                        "player_power": self._player_power,
+                    },
                     narrative_time_delta=0,
                     location="current",
                     entities=["player"],
                 )
 
-                yield f"[Combat outcome: {combat_outcome}] "
+                yield (
+                    f"[Combat: {combat_opponent_name} (power {combat_npc_power}) "
+                    f"vs Player (power {self._player_power}) → {combat_outcome}] "
+                )
             except Exception:
                 logger.warning("Combat engine failed in single-call path", exc_info=True)
 
@@ -927,7 +1056,12 @@ class GameSession:
             # Do NOT mark as introduced yet — we verify after the narrative response
 
         if combat_outcome:
-            narrator_hints += self._build_combat_narrator_hint(combat_outcome)
+            narrator_hints += self._build_combat_narrator_hint(
+                combat_outcome,
+                opponent_name=combat_opponent_name,
+                opponent_power=combat_npc_power,
+                player_power=self._player_power,
+            )
 
         graph_ctx = await self.get_graph_relationship_summary()
 
@@ -1061,11 +1195,18 @@ class GameSession:
         if combat_outcome and clean_response:
             combat_summary = (
                 f"Combat action: {player_input}. "
+                f"Opponent: {combat_opponent_name} (power {combat_npc_power}). "
+                f"Player power: {self._player_power}. "
                 f"Outcome: {combat_outcome}. Quality: {combat_quality}/10."
             )
             combat_entry = await self._journal.evaluate_and_log(self.campaign_id, combat_summary)
             if self._is_journal_entry(combat_entry):
                 yield f"[JOURNAL]{json.dumps({'category': combat_entry.category.value, 'summary': combat_entry.summary, 'created_at': combat_entry.created_at})}"
+
+            # Evaluate player power update after combat
+            power_change = await self._evaluate_power_update(clean_response, player_input)
+            if power_change:
+                yield f"[POWER]{json.dumps(power_change)}"
 
         # Apply side effects from the single-call result
         if mode != NarrativeMode.META and clean_response:
@@ -1198,7 +1339,7 @@ class GameSession:
             self._inventory.lose_item(self.campaign_id, inv_event["name"])
 
     async def _post_narrative_pipeline(self, clean_response: str) -> AsyncIterator[str]:
-        """Run all post-narrative side effects: NPC minds, graph, memory, graphiti."""
+        """Run all post-narrative side effects: NPC minds, graph, memory, graphiti, power."""
         logger.info("_post_narrative_pipeline: starting (response %d chars)", len(clean_response))
         await self._update_npc_minds(clean_response)
         await self._extract_to_graph(clean_response)
@@ -1208,6 +1349,15 @@ class GameSession:
             yield f"[CRYSTAL]{json.dumps({'tier': crystal.tier.value, 'event_count': crystal.event_count})}"
 
         await self._ingest_to_graphiti(clean_response, "narrator_response")
+
+        # Evaluate player power changes from non-combat events too
+        # (e.g., absorbing artifacts, training, crippling injuries)
+        last_player_input = ""
+        if len(self._history) >= 2:
+            last_player_input = self._history[-2].get("content", "")
+        power_change = await self._evaluate_power_update(clean_response, last_player_input)
+        if power_change:
+            yield f"[POWER]{json.dumps(power_change)}"
 
     async def _update_npc_minds(self, narrative_text: str) -> None:
         if not self._npc_minds or not narrative_text:
@@ -1463,10 +1613,12 @@ class GameSession:
                 )
                 return
 
-            npc_power = 5  # default; GraphEngine provides real value when available
+            opponent_name = meta.get("opponent_name", "opponent")
+            llm_estimate = meta.get("opponent_power", 5)
+            npc_power = self._resolve_opponent_power(opponent_name, llm_estimate)
             evaluation = await self._combat.evaluate_action(
                 action=player_input,
-                npc_name="opponent",
+                npc_name=opponent_name or "opponent",
                 npc_power=npc_power,
             )
             outcome = self._combat.roll_outcome(evaluation.final_quality, npc_power)
@@ -1475,14 +1627,23 @@ class GameSession:
             self._event_store.append(
                 campaign_id=self.campaign_id,
                 event_type=EventType.COMBAT_RESULT,
-                payload={"outcome": outcome_value, "quality": evaluation.final_quality},
+                payload={
+                    "outcome": outcome_value,
+                    "quality": evaluation.final_quality,
+                    "opponent_name": opponent_name,
+                    "opponent_power": npc_power,
+                    "player_power": self._player_power,
+                },
                 narrative_time_delta=0,
                 location="current",
                 entities=["player"],
             )
 
             # Prepend outcome hint for narrator
-            outcome_hint = f"[Combat outcome: {outcome_value}] "
+            outcome_hint = (
+                f"[Combat: {opponent_name} (power {npc_power}) vs Player (power {self._player_power}) "
+                f"→ {outcome_value}] "
+            )
             yield outcome_hint
 
             # Inject combat outcome into the player input itself so the LLM cannot ignore it.
@@ -1496,12 +1657,25 @@ class GameSession:
                     f"{player_input}"
                 )
 
-            async for chunk in self._handle_narrative(outcome_injected_input, combat_outcome=outcome_value):
+            async for chunk in self._handle_narrative(
+                outcome_injected_input,
+                combat_outcome=outcome_value,
+                combat_opponent_name=opponent_name,
+                combat_npc_power=npc_power,
+            ):
                 yield chunk
+
+            # Evaluate player power update after combat narrative
+            if self._history:
+                power_change = await self._evaluate_power_update(self._history[-1].get("content", ""), player_input)
+                if power_change:
+                    yield f"[POWER]{json.dumps(power_change)}"
 
             # Log combat as journal entry (supplement auto-detection)
             combat_summary = (
                 f"Combat action: {player_input}. "
+                f"Opponent: {opponent_name} (power {npc_power}). "
+                f"Player power: {self._player_power}. "
                 f"Outcome: {outcome_value}. Quality: {evaluation.final_quality}/10."
             )
             combat_entry = await self._journal.evaluate_and_log(self.campaign_id, combat_summary)
@@ -1615,8 +1789,13 @@ class GameSession:
                 await self._graph.add_relationship(source_id, target_id, rel_type)
 
     @staticmethod
-    def _build_combat_narrator_hint(outcome: str) -> str:
-        """Build narrator instructions based on combat outcome.
+    def _build_combat_narrator_hint(
+        outcome: str,
+        opponent_name: str = "",
+        opponent_power: int = 5,
+        player_power: int = 3,
+    ) -> str:
+        """Build narrator instructions based on combat outcome and power levels.
 
         Uses the creativity-based combat system rules:
         - CRIT_SUCCESS: Spectacular success + 1 free action
@@ -1624,6 +1803,17 @@ class GameSession:
         - FAIL: Action fails, story continues
         - CRIT_FAIL: Action backfires — NPC gains +2 actions
         """
+        power_ctx = (
+            f"\nPOWER CONTEXT: Player power={player_power}/10, "
+            f"Opponent '{opponent_name}' power={opponent_power}/10. "
+        )
+        if player_power > opponent_power + 2:
+            power_ctx += "The player is significantly stronger — narrate accordingly (confident, controlled)."
+        elif opponent_power > player_power + 2:
+            power_ctx += "The opponent is significantly stronger — narrate the power gap (struggle, desperation)."
+        else:
+            power_ctx += "They are roughly matched — narrate a tense, balanced exchange."
+
         rules = {
             "CRIT_SUCCESS": (
                 "\n\nCOMBAT RESULT — CRITICAL SUCCESS:\n"
@@ -1631,12 +1821,14 @@ class GameSession:
                 "Narrate an impressive, cinematic success that exceeds expectations. "
                 "The player earns 1 FREE BONUS ACTION after this — hint at this opportunity. "
                 "Make the success feel earned and thrilling."
+                + power_ctx
             ),
             "SUCCESS": (
                 "\n\nCOMBAT RESULT — SUCCESS:\n"
                 "The player's action SUCCEEDED as intended. "
                 "Narrate the action landing effectively. The opponent is affected. "
                 "Keep it grounded — success, not miraculous."
+                + power_ctx
             ),
             "FAIL": (
                 "\n\nCOMBAT RESULT — FAIL (MANDATORY — THIS OVERRIDES PLAYER INTENT):\n"
@@ -1650,6 +1842,7 @@ class GameSession:
                 "5. Narrate the failure creatively — show WHY it failed (opponent too fast, technique backfired, environment interfered).\n"
                 "6. End with the player in a WORSE position than before the action.\n"
                 "ABSOLUTELY DO NOT describe the player succeeding, winning, or achieving their objective."
+                + power_ctx
             ),
             "CRIT_FAIL": (
                 "\n\nCOMBAT RESULT — CRITICAL FAILURE:\n"
@@ -1659,6 +1852,7 @@ class GameSession:
                 "Narrate the backfire dramatically — the player's own move used against them, "
                 "a stumble that exposes a weakness, or an unintended consequence. "
                 "DO NOT describe any success. The situation worsens for the player."
+                + power_ctx
             ),
         }
         return rules.get(outcome, rules["FAIL"])
