@@ -305,18 +305,33 @@ class GameSession:
         else:
             self._memory._last_crystal_cursor.pop(self.campaign_id, None)
 
-    def _init_player_power(self) -> int:
-        """Derive initial player power from scenario story cards.
+    def _build_power_scale_reference(self) -> str:
+        """Build a power scale reference from NPC story cards.
 
-        Looks at the scenario's tone/lore for hints. Defaults to 3 (beginner adventurer).
+        Uses the existing NPC power_level values as calibration anchors.
+        No hardcoded progression system — the scale comes entirely from the scenario data.
         """
-        tone = (self.scenario_tone or "").lower()
-        if any(w in tone for w in ("legendary", "godlike", "overpowered", "lendário")):
-            return 7
-        if any(w in tone for w in ("veteran", "experienced", "experiente", "veterano")):
-            return 5
-        if any(w in tone for w in ("weak", "helpless", "fraco", "indefeso")):
-            return 1
+        npc_powers = []
+        for card in self._story_cards:
+            if hasattr(card, 'card_type') and str(card.card_type).upper() == "NPC":
+                content = card.content if isinstance(card.content, dict) else {}
+                power = content.get("power_level")
+                if power is not None:
+                    npc_powers.append((card.name, int(power)))
+        if not npc_powers:
+            return ""
+        npc_powers.sort(key=lambda x: x[1], reverse=True)
+        lines = [f"  {name}: {p}/10" for name, p in npc_powers[:20]]
+        return (
+            "WORLD POWER SCALE — use these characters as anchors when estimating power:\n"
+            + "\n".join(lines)
+            + "\n"
+            "Unnamed creatures/enemies should be calibrated relative to these anchors."
+        )
+
+    def _init_player_power(self) -> int:
+        """Default player power — will be overridden by LLM evaluation on first action
+        or by _rebuild_player_power from events."""
         return 3
 
     def _rebuild_player_power(self) -> None:
@@ -354,6 +369,7 @@ class GameSession:
         """
         if not self._combat:
             return None
+        power_scale = self._build_power_scale_reference()
         messages = [
             {
                 "role": "system",
@@ -362,13 +378,12 @@ class GameSession:
                     "Return ONLY JSON: "
                     '{"should_update": bool, "new_power": int, "reason": str}. '
                     f"Current player power: {self._player_power}/10. "
-                    "Power ONLY changes with important story events — should_update=false for everything else. "
-                    "Examples that DO change power: acquiring a legendary weapon, completing intense training, "
-                    "absorbing magical energy, suffering a crippling injury, losing a power source. "
-                    "Examples that do NOT change power: regular combat wins/losses, minor discoveries, "
-                    "conversations, exploration, using items, resting. "
-                    "Maximum change per event: ±1 (except truly extraordinary events: ±2). "
-                    "new_power must be 0-10."
+                    "Power ONLY changes with important story events that fundamentally alter "
+                    "the character's capabilities — should_update=false for everything else. "
+                    "Regular combat, exploration, conversations, and minor events do NOT change power. "
+                    "Maximum change: ±1 per event (±2 only for truly extraordinary transformations). "
+                    "new_power must be 0-10 and consistent with the world power scale below.\n"
+                    + power_scale
                 ),
             },
             {
@@ -653,6 +668,9 @@ class GameSession:
             return
 
         story_ctx = self._history[-1]["content"][:300] if self._history else ""
+        power_scale = self._build_power_scale_reference()
+        if power_scale:
+            story_ctx += "\n" + power_scale
         mode, meta = await self._narrator.detect_mode(player_input, story_context=story_ctx)
         mode = self._coerce_mode(mode)
         narrative_time = meta.get("narrative_time_seconds", 60)
@@ -936,6 +954,9 @@ class GameSession:
         """Single LLM call mode for Anthropic: narrative + mode + NPCs + entities in one request."""
         # Detect mode first so combat pipeline runs before the main LLM call
         story_ctx = self._history[-1]["content"][:300] if self._history else ""
+        power_scale = self._build_power_scale_reference()
+        if power_scale:
+            story_ctx += "\n" + power_scale
         mode, meta = await self._narrator.detect_mode(player_input, story_context=story_ctx)
         mode = self._coerce_mode(mode)
         narrative_time = meta.get("narrative_time_seconds", 60)

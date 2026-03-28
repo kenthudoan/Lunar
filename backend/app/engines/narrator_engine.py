@@ -51,9 +51,10 @@ class NarratorEngine:
                     "ambush: true ONLY if an NPC attacks the player by surprise (not player-initiated). "
                     "narrative_time_seconds: realistic story time this action takes in seconds. "
                     "opponent_name: if COMBAT, the name or description of the opponent being fought (e.g. 'Kael Noir', 'four-legged creature', 'bandit'). Empty string if not COMBAT. "
-                    "opponent_power: if COMBAT, estimate the opponent's power level 1-10 based on context "
-                    "(1=helpless, 2-3=weak creature/civilian, 4-5=trained fighter, 6-7=elite warrior, "
-                    "8-9=legendary/boss, 10=godlike). Use 5 if uncertain. 0 if not COMBAT."
+                    "opponent_power: if COMBAT, estimate the opponent's power level 1-10. "
+                    "If a WORLD POWER SCALE is provided in the context, use those NPCs as anchors "
+                    "to calibrate the opponent relative to the world. "
+                    "Use 3 if truly uncertain. 0 if not COMBAT."
                     + context_hint
                 ),
             },
