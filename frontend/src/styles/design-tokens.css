@@ -1,0 +1,93 @@
+/* ============================================
+   LUNAR DESIGN SYSTEM — CSS Custom Properties
+   ============================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  /* ---- Surface Hierarchy ---- */
+  --bg-base:        #06060c;
+  --bg-surface:     #0c0c16;
+  --bg-elevated:    #13131f;
+  --bg-overlay:     #191928;
+  --bg-glass:       rgba(12, 12, 22, 0.75);
+
+  /* ---- Border ---- */
+  --border-subtle:  rgba(255, 255, 255, 0.05);
+  --border-default: rgba(255, 255, 255, 0.09);
+  --border-strong:  rgba(255, 255, 255, 0.15);
+  --border-focus:  rgba(255, 255, 255, 0.25);
+
+  /* ---- Text ---- */
+  --text-primary:   #e4e4ea;
+  --text-secondary: #9494a4;
+  --text-tertiary:  #5c5c70;
+  --text-disabled:  #3a3a4c;
+  --text-inverse:  #06060c;
+
+  /* ---- Accent — Warm Silver/Lunar ---- */
+  --accent:         #c8c8d8;
+  --accent-hover:   #e0e0ec;
+  --accent-muted:   rgba(200, 200, 216, 0.12);
+  --accent-glow:    rgba(200, 200, 216, 0.15);
+
+  /* ---- Semantic Colors ---- */
+  --success:        #4ade80;
+  --success-muted:  rgba(74, 222, 128, 0.12);
+  --warning:        #fbbf24;
+  --warning-muted:  rgba(251, 191, 36, 0.12);
+  --error:          #f87171;
+  --error-muted:    rgba(248, 113, 113, 0.12);
+  --info:           #60a5fa;
+  --info-muted:     rgba(96, 165, 250, 0.12);
+
+  /* ---- Narrative Mode Colors ---- */
+  --narrative-text: #d4d4dc;
+  --narrative-muted:#8a8a9a;
+  --combat-text:    #fca5a5;
+  --combat-glow:   rgba(248, 113, 113, 0.2);
+  --meta-text:      #93c5fd;
+
+  /* ---- Font Families ---- */
+  --font-prose:     'Lora', Georgia, serif;
+  --font-ui:        'DM Sans', system-ui, sans-serif;
+  --font-mono:      'JetBrains Mono', 'Cascadia Code', monospace;
+
+  /* ---- Spacing ---- */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* ---- Radii ---- */
+  --radius-sm:  6px;
+  --radius-md:  10px;
+  --radius-lg:  16px;
+  --radius-xl:  20px;
+  --radius-2xl: 28px;
+  --radius-full: 9999px;
+
+  /* ---- Shadows ---- */
+  --shadow-sm:  0 1px 3px rgba(0,0,0,0.4);
+  --shadow-md:  0 4px 16px rgba(0,0,0,0.5);
+  --shadow-lg:  0 8px 32px rgba(0,0,0,0.6);
+  --shadow-xl:  0 16px 48px rgba(0,0,0,0.7);
+  --shadow-glow: 0 0 24px rgba(200, 200, 216, 0.08);
+
+  /* ---- Transitions ---- */
+  --transition-fast:   150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow:   400ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-spring: 350ms cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* ---- Layout ---- */
+  --sidebar-width: 220px;
+  --header-height: 56px;
+  --content-max-width: 780px;
+}

@@ -42,6 +42,7 @@ echo [2/5] Setting up Python virtual environment...
 cd backend
 python -m venv venv
 call venv\Scripts\activate.bat
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 cd ..
 

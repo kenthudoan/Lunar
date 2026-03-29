@@ -331,13 +331,13 @@
 - [x] Create a scenario via UI (Playwright: "The Shattered Kingdoms")
 - [x] Start a campaign and verify streaming works (SSE streaming confirmed)
 - [x] Verify world tick fires on long action (WORLD_TICK with 259200s delta confirmed)
-- [ ] Commit: `chore: verify full stack integration and smoke test`
+- [x] Commit: `chore: verify full stack integration and smoke test`
 
 ### Task 10.3: README.md
 - [x] Write `README.md` with installation, usage, and contribution guide
 - [x] Document all features with brief descriptions
 - [x] Add reference acknowledgments
-- [ ] Commit: `docs: add README with installation and usage guide`
+- [x] Commit: `docs: add README with installation and usage guide`
 
 ---
 
