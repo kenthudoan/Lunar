@@ -1,14 +1,16 @@
 import { useState, useEffect } from 'react'
 import Modal from '../UI/Modal'
+import { useI18n } from '../../i18n'
 
 const THOUGHT_LABELS = {
-  feeling: { label: 'Cảm Xúc', color: 'text-amber-400' },
-  goal: { label: 'Mục Tiêu Hiện Tại', color: 'text-emerald-400' },
-  opinion_of_player: { label: 'Ý Kiến Về Người Chơi', color: 'text-[var(--text-secondary)]' },
-  secret_plan: { label: 'Kế Hoạch Bí Mật', color: 'text-rose-400' },
+  feeling: { labelKey: 'npc.feeling', color: 'text-amber-400' },
+  goal: { labelKey: 'npc.goal', color: 'text-emerald-400' },
+  opinion_of_player: { labelKey: 'npc.opinion', color: 'text-[var(--text-secondary)]' },
+  secret_plan: { labelKey: 'npc.secret', color: 'text-rose-400' },
 }
 
 export default function NpcInspector({ open, onClose, campaignId }) {
+  const { t } = useI18n()
   const [npcs, setNpcs] = useState([])
   const [loading, setLoading] = useState(false)
   const [expanded, setExpanded] = useState(null)
@@ -32,13 +34,13 @@ export default function NpcInspector({ open, onClose, campaignId }) {
   }, [open, campaignId])
 
   return (
-    <Modal open={open} onClose={onClose} title="Tâm Trí NPC" size="md">
+    <Modal open={open} onClose={onClose} title={t('panel.npcMinds')} size="md">
       <div className="p-4 space-y-3">
-        {loading && <p className="text-center text-[var(--text-tertiary)] text-sm py-8">{`Đang tải...`}</p>}
+        {loading && <p className="text-center text-[var(--text-tertiary)] text-sm py-8">{t('generic.loading')}</p>}
 
         {!loading && npcs.length === 0 && (
           <div className="text-center py-8">
-            <p className="text-[var(--text-tertiary)] text-sm">Chưa phát hiện tâm trí NPC nào.</p>
+            <p className="text-[var(--text-tertiary)] text-sm">{t('npc.empty')}</p>
           </div>
         )}
 
@@ -55,7 +57,7 @@ export default function NpcInspector({ open, onClose, campaignId }) {
                 <span className="text-sm font-semibold text-[var(--text-primary)]">{npc.name}</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-[10px] text-[var(--text-tertiary)]">{Object.keys(npc.thoughts || {}).length} suy nghĩ</span>
+                <span className="text-[10px] text-[var(--text-tertiary)]">{Object.keys(npc.thoughts || {}).length} {t('npc.thoughts')}</span>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`text-[var(--text-tertiary)] transition-transform ${expanded === i ? 'rotate-180' : ''}`}><polyline points="6 9 12 15 18 9" /></svg>
               </div>
             </button>
@@ -63,11 +65,11 @@ export default function NpcInspector({ open, onClose, campaignId }) {
             {expanded === i && (
               <div className="px-4 pb-4 space-y-3 border-t border-[var(--border-subtle)] pt-3">
                 {Object.entries(npc.thoughts || {}).map(([key, thought]) => {
-                  const meta = THOUGHT_LABELS[key] || { label: key, color: 'text-[var(--text-tertiary)]' }
+                  const meta = THOUGHT_LABELS[key] || { labelKey: key, color: 'text-[var(--text-tertiary)]' }
                   return (
                     <div key={key}>
                       <span className={`text-[10px] uppercase tracking-widest font-bold ${meta.color} block mb-1.5`}>
-                        {meta.label}
+                        {t(meta.labelKey)}
                       </span>
                       <p className="text-sm text-[var(--text-secondary)] font-light leading-relaxed pl-3 border-l-2 border-[var(--border-subtle)]">
                         {thought.value}

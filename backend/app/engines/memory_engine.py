@@ -5,6 +5,7 @@ from enum import Enum
 
 from app.db.event_store import EventStore, Event, EventType
 from app.utils.json_parsing import parse_json_dict
+from app.utils.lang import lang_name
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ class MemoryEngine:
         campaign_id: str,
         tier: CrystalTier,
         force: bool = False,
+        language: str = "en",
     ) -> MemoryCrystal:
         if tier == CrystalTier.SHORT:
             events = self._get_uncrystallized_events(
@@ -77,7 +79,7 @@ class MemoryEngine:
             crystal = MemoryCrystal(
                 campaign_id=campaign_id,
                 tier=tier,
-                content="No meaningful updates yet.",
+                content=lang_name(language) == "Vietnamese" and "Chưa có cập nhật nào đáng chú ý." or "No meaningful updates yet.",
                 ai_content="MEM:EMPTY",
                 event_count=0,
             )
@@ -87,6 +89,12 @@ class MemoryEngine:
         events_text = self._format_event_batch(events)
         previous_ai = self._latest_crystal(campaign_id, tier)
         previous_ai_content = previous_ai.ai_content if previous_ai else ""
+
+        lang_name_val = lang_name(language)
+        lang_hint = (
+            f" Write the 'player_summary' field IN {lang_name_val}. "
+            "All other fields (RELATIONSHIPS, PROMISES, etc.) are machine tags — write those in English."
+        ) if language and language != "en" else ""
 
         prompt = [
             {
@@ -103,7 +111,7 @@ class MemoryEngine:
                     "  KEY_EVENTS: [major plot points in chronological order]\n"
                     "  PLAYER_STATE: [current emotional state, goals, grudges]\n"
                     "  WORLD_STATE: [faction standings, location changes, threats]\n"
-                    "- player_summary: short executive summary for UI (2-4 sentences).\n"
+                    "- player_summary: short executive summary for UI (2-4 sentences)." + lang_hint + "\n"
                     "- NEVER omit relationship details. WHO met WHO and WHAT they discussed is critical.\n"
                     "- Focus on net-new changes from NEW_EVENTS; do not restate stable facts unless changed."
                 ),
@@ -136,7 +144,7 @@ class MemoryEngine:
         if not ai_content:
             ai_content = self._fallback_ai_crystal_summary(events, previous_ai_content)
         if not player_summary:
-            player_summary = self._fallback_player_summary(events)
+            player_summary = self._fallback_player_summary(events, language)
 
         crystal = MemoryCrystal(
             campaign_id=campaign_id,
@@ -170,7 +178,7 @@ class MemoryEngine:
 
         return crystal
 
-    async def auto_crystallize_if_needed(self, campaign_id: str) -> MemoryCrystal | None:
+    async def auto_crystallize_if_needed(self, campaign_id: str, language: str = "en") -> MemoryCrystal | None:
         """Auto-crystallize when raw events exceed threshold."""
         if campaign_id in self._crystallizing:
             return None
@@ -190,7 +198,7 @@ class MemoryEngine:
                 pending_count,
                 campaign_id,
             )
-            crystal = await self.crystallize(campaign_id, CrystalTier.SHORT, force=False)
+            crystal = await self.crystallize(campaign_id, CrystalTier.SHORT, force=False, language=language)
             return crystal
         except Exception:
             logger.warning("Auto-crystallization failed for campaign %s", campaign_id, exc_info=True)
@@ -199,7 +207,11 @@ class MemoryEngine:
             self._crystallizing.discard(campaign_id)
 
     @staticmethod
-    def _fallback_player_summary(events: list[Event]) -> str:
+    def _fallback_player_summary(events: list[Event], language: str = "en") -> str:
+        _fallback_text = {
+            "vi": "Không có sự kiện quan trọng nào được ghi nhận gần đây.",
+        }
+        fallback = _fallback_text.get(language, "No significant events were recorded recently.")
         snippets: list[str] = []
         seen: set[str] = set()
         for event in events[-8:]:
@@ -213,7 +225,7 @@ class MemoryEngine:
                 snippets.append(normalized)
 
         if not snippets:
-            return "No significant events were recorded recently."
+            return fallback
 
         joined = " ".join(snippets)
         if len(joined) > 480:

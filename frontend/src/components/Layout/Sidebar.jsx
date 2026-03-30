@@ -1,5 +1,6 @@
-import { NavLink, useLocation } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useI18n } from '../../i18n'
+import { useGameStore } from '../../store'
 
 // Icon: Moon
 const LunarIcon = () => (
@@ -100,6 +101,20 @@ function SidebarLink({ to, icon: Icon, labelKey, end, onClick }) {
 
 export default function Sidebar({ collapsed = false, onNavigate }) {
   const { t } = useI18n()
+  const navigate = useNavigate()
+  const user = useGameStore((s) => s.user)
+  const isAdmin = useGameStore((s) => s.isAdmin)
+  const logout = useGameStore((s) => s.logout)
+
+  const handleLogout = () => {
+    logout()
+    navigate('/login')
+  }
+
+  const bottomItems = [
+    { to: '/settings', icon: SettingsIcon, labelKey: 'nav.settings' },
+    ...(isAdmin ? [{ to: '/admin', icon: ShieldIcon, labelKey: 'nav.admin' }] : []),
+  ]
 
   return (
     <aside
@@ -141,7 +156,7 @@ export default function Sidebar({ collapsed = false, onNavigate }) {
         <div className="my-3 border-t border-[var(--border-subtle)]" />
 
         <div className="space-y-1">
-          {NAV_BOTTOM.map((item) => (
+          {bottomItems.map((item) => (
             <SidebarLink
               key={item.to}
               to={item.to}
@@ -153,10 +168,25 @@ export default function Sidebar({ collapsed = false, onNavigate }) {
         </div>
       </nav>
 
-      {/* Footer */}
+      {/* Footer — user info + logout */}
       {!collapsed && (
-        <div className="p-3 border-t border-[var(--border-subtle)]">
-          <button className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] hover:bg-[var(--accent-muted)] transition-all duration-150">
+        <div className="p-3 border-t border-[var(--border-subtle)] space-y-2">
+          {/* User info */}
+          <div className="flex items-center gap-3 px-4 py-2.5">
+            <div className="w-8 h-8 rounded-full bg-[var(--accent-muted)] border border-[var(--border-default)] flex items-center justify-center text-sm font-bold text-[var(--text-primary)] flex-shrink-0">
+              {user?.username ? user.username.charAt(0).toUpperCase() : '?'}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-medium text-[var(--text-primary)] truncate">{user?.username || '—'}</div>
+              <div className="text-[10px] text-[var(--text-tertiary)] truncate">{user?.email || ''}</div>
+            </div>
+          </div>
+
+          {/* Logout */}
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-[var(--text-tertiary)] hover:text-[var(--error)] hover:bg-[var(--error-muted)] transition-all duration-150"
+          >
             <LogOutIcon />
             <span>{t('nav.signout')}</span>
           </button>

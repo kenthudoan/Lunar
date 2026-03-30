@@ -1,15 +1,17 @@
 import os
 from datetime import datetime
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.db.scenario_store import ScenarioStore, StoryCardType
 from app.db.event_store import EventStore
+from app.middleware.auth import AuthUser, get_current_user
 
 router = APIRouter()
 
 
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 
 def _get_store() -> ScenarioStore:
     db_path = os.environ.get("SCENARIO_DB_PATH", os.path.join(_BACKEND_DIR, "scenarios.db"))
@@ -48,7 +50,7 @@ class ImportScenarioRequest(BaseModel):
 
 
 @router.post("/", status_code=201)
-def create_scenario(req: CreateScenarioRequest):
+def create_scenario(req: CreateScenarioRequest, current_user: AuthUser = Depends(get_current_user)):
     with _get_store() as store:
         scenario = store.create_scenario(
             title=req.title,
@@ -57,18 +59,19 @@ def create_scenario(req: CreateScenarioRequest):
             opening_narrative=req.opening_narrative,
             language=req.language,
             lore_text=req.lore_text,
+            user_id=current_user.id,
         )
     return scenario.__dict__
 
 
 @router.get("/")
-def list_scenarios():
+def list_scenarios(current_user: AuthUser = Depends(get_current_user)):
     with _get_store() as store:
-        return [s.__dict__ for s in store.list_scenarios()]
+        return [s.__dict__ for s in store.list_scenarios(user_id=current_user.id)]
 
 
 @router.post("/import", status_code=201)
-def import_scenario(req: ImportScenarioRequest):
+def import_scenario(req: ImportScenarioRequest, current_user: AuthUser = Depends(get_current_user)):
     with _get_store() as store:
         scenario = store.create_scenario(
             title=req.scenario.title,
@@ -77,16 +80,17 @@ def import_scenario(req: ImportScenarioRequest):
             opening_narrative=req.scenario.opening_narrative,
             language=req.scenario.language,
             lore_text=req.scenario.lore_text,
+            user_id=current_user.id,
         )
         for card in req.story_cards:
             store.add_story_card(scenario.id, card.card_type, card.name, card.content)
         for campaign in req.campaigns:
-            store.create_campaign(scenario.id, campaign.player_name)
+            store.create_campaign(scenario.id, campaign.player_name, user_id=current_user.id)
     return scenario.__dict__
 
 
 @router.get("/{scenario_id}")
-def get_scenario(scenario_id: str):
+def get_scenario(scenario_id: str, current_user: AuthUser = Depends(get_current_user)):
     with _get_store() as store:
         scenario = store.get_scenario(scenario_id)
     if not scenario:
@@ -95,30 +99,45 @@ def get_scenario(scenario_id: str):
 
 
 @router.post("/{scenario_id}/story-cards", status_code=201)
-def add_story_card(scenario_id: str, req: AddStoryCardRequest):
+def add_story_card(scenario_id: str, req: AddStoryCardRequest, current_user: AuthUser = Depends(get_current_user)):
     with _get_store() as store:
+        scenario = store.get_scenario(scenario_id)
+        if not scenario:
+            raise HTTPException(status_code=404, detail="Scenario not found")
+        if scenario.user_id and scenario.user_id != current_user.id and not current_user.is_admin:
+            raise HTTPException(status_code=403, detail="Not authorized to modify this scenario")
         card = store.add_story_card(scenario_id, req.card_type, req.name, req.content)
     return card.__dict__
 
 
 @router.get("/{scenario_id}/story-cards")
-def get_story_cards(scenario_id: str):
+def get_story_cards(scenario_id: str, current_user: AuthUser = Depends(get_current_user)):
     with _get_store() as store:
         return [c.__dict__ for c in store.get_story_cards(scenario_id)]
 
 
 @router.post("/{scenario_id}/campaigns", status_code=201)
-def create_campaign(scenario_id: str, req: CampaignData):
+def create_campaign(scenario_id: str, req: CampaignData, current_user: AuthUser = Depends(get_current_user)):
     with _get_store() as store:
         scenario = store.get_scenario(scenario_id)
         if not scenario:
             raise HTTPException(status_code=404, detail="Scenario not found")
-        campaign = store.create_campaign(scenario_id, req.player_name)
-    return campaign.__dict__
+        campaign = store.create_campaign(scenario_id, req.player_name, user_id=current_user.id)
+    return {
+        "campaign": campaign.__dict__,
+        "scenario": {
+            "id": scenario.id,
+            "title": scenario.title,
+            "description": scenario.description,
+            "tone_instructions": scenario.tone_instructions,
+            "opening_narrative": scenario.opening_narrative,
+            "language": scenario.language,
+        },
+    }
 
 
 @router.get("/{scenario_id}/campaigns")
-def get_campaigns(scenario_id: str):
+def get_campaigns(scenario_id: str, current_user: AuthUser = Depends(get_current_user)):
     with _get_store() as store:
         scenario = store.get_scenario(scenario_id)
         campaigns = store.get_campaigns(scenario_id) if scenario else None
@@ -128,7 +147,7 @@ def get_campaigns(scenario_id: str):
 
 
 @router.get("/{scenario_id}/export")
-def export_scenario(scenario_id: str):
+def export_scenario(scenario_id: str, current_user: AuthUser = Depends(get_current_user)):
     with _get_store() as store:
         scenario = store.get_scenario(scenario_id)
         story_cards = store.get_story_cards(scenario_id) if scenario else []
@@ -159,8 +178,13 @@ def export_scenario(scenario_id: str):
 
 
 @router.delete("/{scenario_id}/campaigns/{campaign_id}", status_code=200)
-def delete_campaign(scenario_id: str, campaign_id: str):
+def delete_campaign(scenario_id: str, campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
     with _get_store() as store:
+        campaign = store.get_campaign(campaign_id)
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        if campaign.user_id and campaign.user_id != current_user.id and not current_user.is_admin:
+            raise HTTPException(status_code=403, detail="Not authorized to delete this campaign")
         deleted = store.delete_campaign(campaign_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -173,9 +197,13 @@ def delete_campaign(scenario_id: str, campaign_id: str):
 
 
 @router.delete("/{scenario_id}", status_code=200)
-def delete_scenario(scenario_id: str):
+def delete_scenario(scenario_id: str, current_user: AuthUser = Depends(get_current_user)):
     with _get_store() as store:
-        # Get all campaigns to clean up their events
+        scenario = store.get_scenario(scenario_id)
+        if not scenario:
+            raise HTTPException(status_code=404, detail="Scenario not found")
+        if scenario.user_id and scenario.user_id != current_user.id and not current_user.is_admin:
+            raise HTTPException(status_code=403, detail="Not authorized to delete this scenario")
         campaigns = store.get_campaigns(scenario_id)
         deleted = store.delete_scenario(scenario_id)
     if not deleted:

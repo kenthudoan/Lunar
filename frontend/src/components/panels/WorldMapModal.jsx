@@ -1,6 +1,30 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
 import Modal from '../UI/Modal'
+import { useI18n } from '../../i18n'
+
+const ATTRIBUTE_LABELS = (t) => ({
+  description: t('map.attr.description'),
+  power_level: t('map.attr.power_level'),
+  location_type: t('map.attr.location_type'),
+  faction_type: t('map.attr.faction_type'),
+  item_type: t('map.attr.item_type'),
+  role: t('map.attr.role'),
+  status: t('map.attr.status'),
+  mood: t('map.attr.mood'),
+  goal: t('map.attr.goal'),
+  faction: t('map.attr.faction'),
+  leader: t('map.attr.leader'),
+  members: t('map.attr.members'),
+  influence: t('map.attr.influence'),
+  danger_level: t('map.attr.danger_level'),
+  rarity: t('map.attr.rarity'),
+  material: t('map.attr.material'),
+  history: t('map.attr.history'),
+  appearance: t('map.attr.appearance'),
+  personality: t('map.attr.personality'),
+  secret: t('map.attr.secret'),
+})
 
 const NODE_COLORS = {
   NPC: '#a78bfa',
@@ -22,7 +46,55 @@ const TYPE_POSITIONS = {
   EVENT: { x: -60, y: 80 },
 }
 
+/** Keys usually rendered as a paragraph; others stay on one compact row. */
+const MULTILINE_ATTR_KEYS = new Set([
+  'description', 'history', 'appearance', 'personality', 'secret', 'goal', 'members', 'material',
+])
+
+function sortAttributeEntries(entries) {
+  const rank = (k) => {
+    if (k === 'description') return 0
+    if (MULTILINE_ATTR_KEYS.has(k)) return 1
+    return 2
+  }
+  return [...entries].sort((a, b) => {
+    const ra = rank(a[0])
+    const rb = rank(b[0])
+    if (ra !== rb) return ra - rb
+    return a[0].localeCompare(b[0])
+  })
+}
+
+function isMultilineAttribute(key, val) {
+  const s = String(val)
+  return MULTILINE_ATTR_KEYS.has(key) || s.includes('\n') || s.length > 72
+}
+
+/** Canvas 2D: draw label centered at x, word-wrapped to reduce overlap. */
+function fillTextWrappedCenter(ctx, text, x, yTop, maxWidth, lineHeight) {
+  const words = String(text).split(/\s+/).filter(Boolean)
+  const lines = []
+  let line = ''
+  for (const w of words) {
+    const test = line ? `${line} ${w}` : w
+    if (ctx.measureText(test).width > maxWidth && line) {
+      lines.push(line)
+      line = w
+    } else {
+      line = test
+    }
+  }
+  if (line) lines.push(line)
+  let y = yTop
+  for (const ln of lines) {
+    ctx.fillText(ln, x, y)
+    y += lineHeight
+  }
+}
+
 export default function WorldMapModal({ open, onClose, campaignId }) {
+  const { t } = useI18n()
+  const labels = ATTRIBUTE_LABELS(t)
   const [graphData, setGraphData] = useState({ nodes: [], links: [] })
   const [loading, setLoading] = useState(false)
   const [hoverNode, setHoverNode] = useState(null)
@@ -116,7 +188,8 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
       ctx.textAlign = 'center'
       ctx.textBaseline = 'top'
       ctx.fillStyle = isHighlighted ? '#e2e8f0' : '#64748b'
-      ctx.fillText(label, node.x, node.y + radius + 2)
+      const wrapW = Math.min(200, Math.max(96, 520 / Math.max(globalScale, 0.35)))
+      fillTextWrappedCenter(ctx, label, node.x, node.y + radius + 2, wrapW, fontSize * 1.2)
     }
   }, [hoverNode, highlightSet, linkCountMap])
 
@@ -145,7 +218,7 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Bản Đồ Thế Giới" size="full">
+    <Modal open={open} onClose={onClose} title={t('panel.worldMap')} size="2xl">
       {/* Legend */}
       <div className="flex flex-wrap items-center gap-4 px-6 py-3 border-b border-[var(--border-subtle)]">
         {Object.entries(NODE_COLORS).map(([type, color]) => (
@@ -162,12 +235,12 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
           type="text"
           value={searchQuery}
           onChange={handleSearchInputChange}
-          placeholder="Tìm kiếm sự kiện thế giới..."
+          placeholder={t('map.search')}
           className="w-full input"
         />
         {searchResults.length > 0 && (
           <div className="mt-2 p-2 bg-[var(--bg-elevated)] rounded-lg max-h-32 overflow-y-auto scrollbar">
-            <button onClick={() => { setSearchResults([]); setSearchHighlightSet(null) }} className="text-right w-full text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] text-xs mb-1">Xóa</button>
+            <button onClick={() => { setSearchResults([]); setSearchHighlightSet(null) }} className="text-right w-full text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] text-xs mb-1">{t('map.searchClear')}</button>
             {searchResults.map((r, i) => <div key={i} className="text-[var(--text-secondary)] text-sm py-1 border-b border-[var(--border-subtle)] last:border-0">{r.fact}</div>)}
           </div>
         )}
@@ -178,7 +251,7 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
         {graphData.nodes.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <p className="text-[var(--text-tertiary)] text-sm">
-              {loading ? 'Đang lập bản đồ...' : 'Chưa có dữ liệu thế giới. Chơi để tạo bản đồ.'}
+              {loading ? t('map.loading') : t('map.empty')}
             </p>
           </div>
         ) : (
@@ -204,23 +277,60 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
 
         {selectedNode && (
           <div
-            className="absolute z-10 bg-[var(--bg-overlay)] border border-[var(--border-default)] rounded-xl p-4 min-w-[200px] max-w-[260px] shadow-[var(--shadow-xl)] pointer-events-none"
+            className="absolute z-10 bg-[var(--bg-overlay)] border border-[var(--border-default)] rounded-lg p-3 w-max max-w-[min(22rem,calc(100%-1rem))] max-h-[min(48vh,22rem)] overflow-y-auto overscroll-contain shadow-lg pointer-events-auto scrollbar"
             style={{
-              left: Math.min(tooltipPos.x + 10, (containerRef.current?.clientWidth || 800) - 280),
-              top: Math.min(tooltipPos.y - 10, (containerRef.current?.clientHeight || 500) - 200),
+              left: Math.min(
+                tooltipPos.x + 10,
+                Math.max(8, (containerRef.current?.clientWidth || 800) - 368),
+              ),
+              top: Math.min(
+                tooltipPos.y - 10,
+                Math.max(8, (containerRef.current?.clientHeight || 500) - 380),
+              ),
             }}
           >
-            <div className="flex items-center gap-2 mb-2">
-              <div className="w-3 h-3 rounded-full" style={{ backgroundColor: NODE_COLORS[selectedNode.node_type] }} />
-              <span className="text-sm font-semibold text-[var(--text-primary)]">{selectedNode.name}</span>
-            </div>
-            <span className="badge badge-default text-[10px] mb-3">{selectedNode.node_type}</span>
-            {selectedNode.attributes && Object.entries(selectedNode.attributes).slice(0, 4).map(([key, val]) => (
-              <div key={key} className="flex justify-between text-xs py-0.5">
-                <span className="text-[var(--text-tertiary)]">{key.replace(/_/g, ' ')}</span>
-                <span className="text-[var(--text-secondary)] ml-3 truncate max-w-[120px]">{String(val)}</span>
+            <div className="flex items-start gap-2 min-w-0">
+              <div className="w-2.5 h-2.5 rounded-full shrink-0 mt-1" style={{ backgroundColor: NODE_COLORS[selectedNode.node_type] }} />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <span className="text-sm font-semibold text-[var(--text-primary)] leading-snug break-words">
+                    {selectedNode.name}
+                  </span>
+                  <span className="badge badge-default text-[9px] px-1.5 py-0 leading-none shrink-0">
+                    {selectedNode.node_type}
+                  </span>
+                </div>
+                {selectedNode.attributes && (
+                  <dl className="mt-2 space-y-0 border-t border-[var(--border-subtle)] pt-2">
+                    {sortAttributeEntries(Object.entries(selectedNode.attributes)).map(([key, val]) => {
+                      const long = isMultilineAttribute(key, val)
+                      const label = labels[key] || key.replace(/_/g, ' ')
+                      if (long) {
+                        return (
+                          <div key={key} className="pt-2 first:pt-0 border-t border-[var(--border-subtle)] first:border-t-0">
+                            <dt className="text-[10px] uppercase tracking-wide text-[var(--text-tertiary)] leading-none mb-1">
+                              {label}
+                            </dt>
+                            <dd className="text-xs text-[var(--text-secondary)] break-words whitespace-pre-wrap leading-snug">
+                              {String(val)}
+                            </dd>
+                          </div>
+                        )
+                      }
+                      return (
+                        <div
+                          key={key}
+                          className="flex items-baseline justify-between gap-3 text-xs leading-tight py-1 border-t border-[var(--border-subtle)] first:border-t-0 first:pt-0 pt-1"
+                        >
+                          <dt className="text-[var(--text-tertiary)] shrink-0">{label}</dt>
+                          <dd className="text-[var(--text-secondary)] text-right min-w-0 break-words">{String(val)}</dd>
+                        </div>
+                      )
+                    })}
+                  </dl>
+                )}
               </div>
-            ))}
+            </div>
           </div>
         )}
       </div>

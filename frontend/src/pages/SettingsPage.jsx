@@ -16,7 +16,7 @@ export default function SettingsPage() {
 
       {/* Language */}
       <div className="card p-5 space-y-4">
-        <h2 className="text-sm font-semibold text-[var(--text-primary)]">Ngôn Ngữ</h2>
+        <h2 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings.language')}</h2>
         <div className="space-y-2">
           {LANGUAGES.map((lang) => (
             <button
@@ -43,7 +43,7 @@ export default function SettingsPage() {
 
       {/* LLM Settings */}
       <div className="card p-5 space-y-4">
-        <h2 className="text-sm font-semibold text-[var(--text-primary)]">Cài Đặt LLM</h2>
+        <h2 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings.llm')}</h2>
 
         <div className="space-y-1">
           <div className="flex items-center justify-between py-2 border-b border-[var(--border-subtle)]">
@@ -65,19 +65,19 @@ export default function SettingsPage() {
         </div>
 
         <p className="text-xs text-[var(--text-disabled)]">
-          Thay đổi cài đặt LLM trong phiên chơi bằng nút Cài Đặt trên màn hình Play.
+          {t('settings.llmHint')}
         </p>
       </div>
 
       {/* About */}
       <div className="card p-5 space-y-3">
-        <h2 className="text-sm font-semibold text-[var(--text-primary)]">Về Project Lunar</h2>
+        <h2 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings.about')}</h2>
         <div className="space-y-2 text-sm text-[var(--text-tertiary)]">
           <p>Version: <span className="font-mono text-[var(--text-secondary)]">2.0.0</span></p>
           <p>Frontend: <span className="font-mono text-[var(--text-secondary)]">React 19 + Vite + Zustand + Tailwind</span></p>
           <p>Backend: <span className="font-mono text-[var(--text-secondary)]">FastAPI + Neo4j + litellm</span></p>
           <p className="pt-2 text-xs">
-            Một nền tảng phiêu lưu kể chuyện được điều khiển bởi AI. Tạo thế giới. Sống cuộc phiêu lưu.
+            {t('settings.aboutText')}
           </p>
         </div>
       </div>

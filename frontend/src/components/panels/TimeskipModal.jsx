@@ -1,16 +1,18 @@
 import { useState } from 'react'
 import Modal from '../UI/Modal'
+import { useI18n } from '../../i18n'
 
 const PRESETS = [
-  { label: '1 Giờ', seconds: 3600 },
-  { label: '8 Giờ', seconds: 28800 },
-  { label: '1 Ngày', seconds: 86400 },
-  { label: '3 Ngày', seconds: 259200 },
-  { label: '1 Tuần', seconds: 604800 },
-  { label: '1 Tháng', seconds: 2592000 },
+  { labelKey: 'timeskip.1hour', seconds: 3600 },
+  { labelKey: 'timeskip.8hours', seconds: 28800 },
+  { labelKey: 'timeskip.1day', seconds: 86400 },
+  { labelKey: 'timeskip.3days', seconds: 259200 },
+  { labelKey: 'timeskip.1week', seconds: 604800 },
+  { labelKey: 'timeskip.1month', seconds: 2592000 },
 ]
 
 export default function TimeskipModal({ open, onClose, campaignId, onTimeskip }) {
+  const { t } = useI18n()
   const [selected, setSelected] = useState(null)
   const [loading, setLoading] = useState(false)
   const [summary, setSummary] = useState(null)
@@ -34,12 +36,12 @@ export default function TimeskipModal({ open, onClose, campaignId, onTimeskip })
   const reset = () => { setSummary(null); setSelected(null) }
 
   return (
-    <Modal open={open} onClose={() => { onClose(); reset() }} title="Tua Thời Gian" size="md">
+    <Modal open={open} onClose={() => { onClose(); reset() }} title={t('panel.timeskip')} size="md">
       <div className="p-4 space-y-4">
         {!summary ? (
           <>
             <p className="text-sm text-[var(--text-tertiary)] font-light leading-relaxed">
-              Di chuyển thời gian. Thế giới sẽ phản ứng — NPC di chuyển, phe phái thay đổi, tin đồn lan truyền.
+              {t('timeskip.description')}
             </p>
             <div className="grid grid-cols-3 gap-2">
               {PRESETS.map((p) => (
@@ -54,7 +56,7 @@ export default function TimeskipModal({ open, onClose, campaignId, onTimeskip })
                     }
                   `}
                 >
-                  {p.label}
+                  {t(p.labelKey)}
                 </button>
               ))}
             </div>
@@ -64,15 +66,15 @@ export default function TimeskipModal({ open, onClose, campaignId, onTimeskip })
               className="w-full btn btn-primary"
             >
               {loading ? (
-                <><svg className="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>Thế giới đang thay đổi...</>
-              ) : `Tua ${selected?.label || '...'}`}
+                <><svg className="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>{t('timeskip.worldEvolving')}</>
+              ) : t('timeskip.execute', { label: selected ? t(selected.labelKey) : '' })}
             </button>
           </>
         ) : (
           <>
             <div className="text-center">
               <span className="text-[10px] uppercase tracking-widest text-[var(--text-tertiary)] font-bold">
-                {selected?.label} đã trôi qua
+                {selected ? `${t(selected.labelKey)} ${t('timeskip.passed')}` : t('timeskip.passed')}
               </span>
             </div>
             <div className="p-4 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)]">
@@ -81,7 +83,7 @@ export default function TimeskipModal({ open, onClose, campaignId, onTimeskip })
               </p>
             </div>
             <button onClick={() => { onClose(); reset() }} className="w-full btn btn-secondary">
-              Tiếp Tục
+              {t('timeskip.continue')}
             </button>
           </>
         )}

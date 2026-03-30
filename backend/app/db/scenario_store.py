@@ -25,6 +25,8 @@ class Scenario:
     language: str
     lore_text: str
     created_at: str
+    user_id: str | None = None
+    is_public: bool = True
 
 
 @dataclass
@@ -43,10 +45,11 @@ class Campaign:
     scenario_id: str
     player_name: str
     created_at: str
+    user_id: str | None = None
 
 
 class ScenarioStore:
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     _MIGRATIONS = {
         1: [
@@ -75,8 +78,11 @@ class ScenarioStore:
                 created_at TEXT NOT NULL
             )""",
         ],
-        # Future migrations go here:
-        # 2: ["ALTER TABLE scenarios ADD COLUMN ..."],
+        2: [
+            """ALTER TABLE scenarios ADD COLUMN user_id TEXT""",
+            """ALTER TABLE scenarios ADD COLUMN is_public INTEGER NOT NULL DEFAULT 1""",
+            """ALTER TABLE campaigns ADD COLUMN user_id TEXT""",
+        ],
     }
 
     def __init__(self, db_path: str = "scenarios.db"):
@@ -103,7 +109,12 @@ class ScenarioStore:
                 if version <= current:
                     continue
                 for sql in self._MIGRATIONS[version]:
-                    self._conn.execute(sql)
+                    try:
+                        self._conn.execute(sql)
+                    except sqlite3.OperationalError as e:
+                        # Column already exists — safe to ignore
+                        if 'duplicate column' not in str(e).lower():
+                            raise
                 self._conn.execute(
                     "INSERT INTO schema_version VALUES (?, ?)",
                     (version, datetime.utcnow().isoformat()),
@@ -118,6 +129,7 @@ class ScenarioStore:
         opening_narrative: str = "",
         language: str = "en",
         lore_text: str = "",
+        user_id: str | None = None,
     ) -> Scenario:
         scenario = Scenario(
             id=str(uuid.uuid4()),
@@ -128,13 +140,16 @@ class ScenarioStore:
             language=language,
             lore_text=lore_text,
             created_at=datetime.utcnow().isoformat(),
+            user_id=user_id,
+            is_public=True,
         )
         with self._lock:
             self._conn.execute(
-                "INSERT INTO scenarios VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO scenarios VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (scenario.id, scenario.title, scenario.description,
                  scenario.tone_instructions, scenario.opening_narrative,
-                 scenario.language, scenario.lore_text, scenario.created_at),
+                 scenario.language, scenario.lore_text, scenario.created_at,
+                 scenario.user_id, int(scenario.is_public)),
             )
             self._conn.commit()
         return scenario
@@ -145,13 +160,34 @@ class ScenarioStore:
         ).fetchone()
         if not row:
             return None
-        return Scenario(*row)
+        return Scenario(
+            id=row[0], title=row[1], description=row[2], tone_instructions=row[3],
+            opening_narrative=row[4], language=row[5], lore_text=row[6],
+            created_at=row[7],
+            user_id=row[8] if len(row) > 8 else None,
+            is_public=bool(row[9]) if len(row) > 9 else True,
+        )
 
-    def list_scenarios(self) -> "list[Scenario]":
-        rows = self._conn.execute(
-            "SELECT * FROM scenarios ORDER BY created_at DESC"
-        ).fetchall()
-        return [Scenario(*r) for r in rows]
+    def list_scenarios(self, user_id: str | None = None) -> "list[Scenario]":
+        if user_id:
+            rows = self._conn.execute(
+                "SELECT * FROM scenarios WHERE user_id=? ORDER BY created_at DESC",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM scenarios ORDER BY created_at DESC"
+            ).fetchall()
+        scenarios = []
+        for r in rows:
+            scenarios.append(Scenario(
+                id=r[0], title=r[1], description=r[2], tone_instructions=r[3],
+                opening_narrative=r[4], language=r[5], lore_text=r[6],
+                created_at=r[7],
+                user_id=r[8] if len(r) > 8 else None,
+                is_public=bool(r[9]) if len(r) > 9 else True,
+            ))
+        return scenarios
 
     def add_story_card(
         self,
@@ -187,17 +223,18 @@ class ScenarioStore:
             for r in rows
         ]
 
-    def create_campaign(self, scenario_id: str, player_name: str) -> Campaign:
+    def create_campaign(self, scenario_id: str, player_name: str, user_id: str | None = None) -> Campaign:
         campaign = Campaign(
             id=str(uuid.uuid4()),
             scenario_id=scenario_id,
             player_name=player_name,
             created_at=datetime.utcnow().isoformat(),
+            user_id=user_id,
         )
         with self._lock:
             self._conn.execute(
-                "INSERT INTO campaigns VALUES (?,?,?,?)",
-                (campaign.id, campaign.scenario_id, campaign.player_name, campaign.created_at),
+                "INSERT INTO campaigns VALUES (?,?,?,?,?)",
+                (campaign.id, campaign.scenario_id, campaign.player_name, campaign.created_at, campaign.user_id),
             )
             self._conn.commit()
         return campaign
@@ -207,7 +244,39 @@ class ScenarioStore:
             "SELECT * FROM campaigns WHERE scenario_id=? ORDER BY created_at DESC",
             (scenario_id,),
         ).fetchall()
-        return [Campaign(*r) for r in rows]
+        return [
+            Campaign(
+                id=r[0], scenario_id=r[1], player_name=r[2], created_at=r[3],
+                user_id=r[4] if len(r) > 4 else None,
+            )
+            for r in rows
+        ]
+
+    def get_campaign(self, campaign_id: str) -> "Campaign | None":
+        """Get a single campaign by id."""
+        row = self._conn.execute(
+            "SELECT * FROM campaigns WHERE id=?", (campaign_id,)
+        ).fetchone()
+        if not row:
+            return None
+        return Campaign(
+            id=row[0], scenario_id=row[1], player_name=row[2], created_at=row[3],
+            user_id=row[4] if len(row) > 4 else None,
+        )
+
+    def get_user_campaigns(self, user_id: str) -> "list[Campaign]":
+        """Get all campaigns belonging to a user."""
+        rows = self._conn.execute(
+            "SELECT * FROM campaigns WHERE user_id=? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+        return [
+            Campaign(
+                id=r[0], scenario_id=r[1], player_name=r[2], created_at=r[3],
+                user_id=r[4] if len(r) > 4 else None,
+            )
+            for r in rows
+        ]
 
     def delete_campaign(self, campaign_id: str) -> bool:
         """Delete a campaign by id. Returns True if a row was deleted."""

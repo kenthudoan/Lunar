@@ -176,6 +176,19 @@ class GraphEngine:
                 })
             return rels
 
+    async def update_node_attributes(self, node_id: str, attributes: dict) -> None:
+        """Merge new attributes into an existing node (preserving old values)."""
+        async with self._driver.session() as session:
+            await session.run(
+                """
+                MATCH (n:WorldNode {node_id: $node_id, campaign_id: $campaign_id})
+                SET n.attributes_json = $attributes_json
+                """,
+                node_id=node_id,
+                campaign_id=self.campaign_id,
+                attributes_json=json.dumps(attributes),
+            )
+
     async def clear_campaign(self, campaign_id: str):
         async with self._driver.session() as session:
             await session.run(

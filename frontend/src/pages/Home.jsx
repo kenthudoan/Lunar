@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useI18n } from '../i18n'
-import { useGameStore } from '../store'
+import { useGameStore, persistCampaignState } from '../store'
 import { fetchScenarios, exportScenario, fetchCampaigns, createCampaign, checkNeo4j, deleteCampaign, deleteScenario } from '../api'
 
 // Icon: Plus
@@ -47,7 +47,7 @@ const RefreshIcon = () => (
 
 export default function Home() {
   const { t } = useI18n()
-  const { scenarios, setScenarios, setActiveScenario, setActiveCampaignId, clearMessages } = useGameStore()
+  const { scenarios, setScenarios } = useGameStore()
   const navigate = useNavigate()
   const [campaignsMap, setCampaignsMap] = useState({})
   const [loading, setLoading] = useState(true)
@@ -78,15 +78,12 @@ export default function Home() {
       await warnIfNeo4jDown()
       const campaigns = campaignsMap[scenario.id] || []
       if (campaigns.length > 0) {
-        setActiveScenario(scenario)
-        setActiveCampaignId(campaigns[0].id)
-        navigate('/play')
+        persistCampaignState(campaigns[0].id, { scenario })
+        navigate(`/play/${campaigns[0].id}`)
       } else {
-        const campaign = await createCampaign(scenario.id)
-        setActiveScenario(scenario)
-        setActiveCampaignId(campaign.id)
-        clearMessages()
-        navigate('/play')
+        const { campaign, scenario: scenarioData } = await createCampaign(scenario.id)
+        persistCampaignState(campaign.id, { scenario: scenarioData })
+        navigate(`/play/${campaign.id}`)
       }
     } catch {
       alert(t('error.createFailed'))
@@ -97,11 +94,9 @@ export default function Home() {
     if (!window.confirm(t('error.newAdventure'))) return
     try {
       await warnIfNeo4jDown()
-      const campaign = await createCampaign(scenario.id)
-      setActiveScenario(scenario)
-      setActiveCampaignId(campaign.id)
-      clearMessages()
-      navigate('/play')
+      const { campaign, scenario: scenarioData } = await createCampaign(scenario.id)
+      persistCampaignState(campaign.id, { scenario: scenarioData })
+      navigate(`/play/${campaign.id}`)
     } catch {
       alert(t('error.createFailed'))
     }
@@ -126,15 +121,6 @@ export default function Home() {
     try {
       await deleteScenario(scenarioId)
       setScenarios(scenarios.filter((s) => s.id !== scenarioId))
-      try {
-        const stored = localStorage.getItem('lunar_activeScenario')
-        if (stored) {
-          const parsed = JSON.parse(stored)
-          if (parsed.id === scenarioId) {
-            useGameStore.getState().clearSession()
-          }
-        }
-      } catch {}
     } catch {
       alert(t('generic.error'))
     }
@@ -143,12 +129,7 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-[var(--bg-base)]">
       {/* Hero */}
-      <div className="relative overflow-hidden border-b border-[var(--border-subtle)]">
-        {/* Background texture */}
-        <div className="absolute inset-0 opacity-30">
-          <div className="absolute inset-0 bg-gradient-to-b from-[var(--bg-base)] via-transparent to-[var(--bg-base)]" />
-          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-radial from-[var(--accent-glow)] to-transparent opacity-40" />
-        </div>
+      <div className="border-b border-[var(--border-subtle)]">
 
         <div className="relative max-w-3xl mx-auto px-6 py-16 text-center">
           {/* Badge */}
@@ -171,11 +152,11 @@ export default function Home() {
             to="/create"
             className="
               inline-flex items-center gap-2 px-6 py-3 rounded-xl
-              bg-[var(--accent)] text-[var(--text-inverse)]
+              border border-[rgba(200,200,216,0.32)]
+              bg-[rgba(200,200,216,0.15)] text-[var(--text-primary)]
               font-semibold text-sm
-              hover:bg-[var(--accent-hover)]
-              shadow-[var(--shadow-md)]
-              hover:shadow-[var(--shadow-lg)]
+              hover:bg-[rgba(200,200,216,0.22)] hover:border-[rgba(200,200,216,0.48)]
+              shadow-[var(--shadow-sm)]
               transition-all duration-200
             "
           >
@@ -262,9 +243,10 @@ export default function Home() {
                       className="
                         flex-1 flex items-center justify-center gap-2
                         px-4 py-2.5 rounded-xl
-                        bg-[var(--accent)] text-[var(--text-inverse)]
-                        font-semibold text-sm
-                        hover:bg-[var(--accent-hover)]
+              border border-[rgba(200,200,216,0.32)]
+              bg-[rgba(200,200,216,0.15)] text-[var(--text-primary)]
+              font-semibold text-sm
+              hover:bg-[rgba(200,200,216,0.22)] hover:border-[rgba(200,200,216,0.48)]
                         transition-all duration-150
                       "
                     >

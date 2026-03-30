@@ -93,13 +93,13 @@ html {
   }
 
   .btn-primary {
-    background: var(--accent);
-    color: var(--text-inverse);
-    border-color: var(--accent);
+    background: rgba(200, 200, 216, 0.15);
+    color: var(--text-primary);
+    border-color: rgba(200, 200, 216, 0.32);
   }
   .btn-primary:hover:not(:disabled) {
-    background: var(--accent-hover);
-    box-shadow: 0 0 20px var(--accent-glow);
+    background: rgba(200, 200, 216, 0.22);
+    border-color: rgba(200, 200, 216, 0.48);
   }
 
   .btn-secondary {
@@ -277,7 +277,7 @@ html {
   .tooltip-wrap:hover .tooltip-content { opacity: 1; pointer-events: auto; }
   .tooltip-content {
     position: absolute;
-    bottom: calc(100% + 6px);
+    top: calc(100% + 6px);
     left: 50%;
     transform: translateX(-50%);
     background: var(--bg-overlay);
@@ -365,6 +365,12 @@ html {
 .animate-fade-in  { animation: fade-in  var(--transition-normal) ease forwards; }
 .animate-slide-in { animation: slide-in-right var(--transition-normal) ease forwards; }
 .animate-scale-in { animation: scale-in var(--transition-spring) forwards; }
+.animate-slide-up { animation: slide-up var(--transition-spring) ease forwards; }
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(100%); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 
 /* ============================================
    NARRATIVE MODE — Combat Overlay

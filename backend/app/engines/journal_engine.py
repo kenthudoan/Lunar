@@ -5,6 +5,7 @@ from datetime import datetime
 from enum import Enum
 
 from app.utils.json_parsing import parse_json_dict
+from app.utils.lang import lang_name
 
 
 class JournalCategory(str, Enum):
@@ -33,7 +34,13 @@ class JournalEngine:
         self,
         campaign_id: str,
         narrative_text: str,
+        language: str = "en",
     ) -> JournalEntry | None:
+        lang_name_val = lang_name(language)
+        lang_hint = (
+            f" Write the 'summary' field in {lang_name_val}."
+        ) if language and language != "en" else ""
+
         messages = [
             {
                 "role": "system",
@@ -50,7 +57,7 @@ class JournalEngine:
                     "Return ONLY valid JSON (no markdown): "
                     '{"relevant": bool, '
                     '"category": "DISCOVERY|RELATIONSHIP_CHANGE|COMBAT|DECISION|WORLD_EVENT|null", '
-                    '"summary": "one sentence summary or null"}'
+                    '"summary": "one sentence summary or null"}' + lang_hint
                 ),
             },
             {"role": "user", "content": narrative_text},

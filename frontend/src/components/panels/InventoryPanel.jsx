@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { fetchInventory, updateInventoryItem } from '../../api'
 import Modal from '../UI/Modal'
+import { useI18n } from '../../i18n'
+import { fetchInventory, updateInventoryItem } from '../../api'
 
 const CATEGORY_ICONS = {
   weapon: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 17.5L3 6V3h3l11.5 11.5" /><path d="M13 19l6-6" /><path d="M16 16l4 4" /><path d="M19 21l2-2" /></svg>,
@@ -21,6 +22,7 @@ const CATEGORY_COLORS = {
 }
 
 export default function InventoryPanel({ open, onClose, campaignId, inventory = [], setInventory }) {
+  const { t } = useI18n()
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
@@ -58,13 +60,13 @@ export default function InventoryPanel({ open, onClose, campaignId, inventory = 
               onClick={() => handleAction(item.name, 'use')}
               className="px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-[var(--warning-muted)] text-[var(--warning)] border border-[rgba(251,191,36,0.2)] hover:bg-[rgba(251,191,36,0.15)] transition-colors"
             >
-              Use
+              {t('inventory.use')}
             </button>
             <button
               onClick={() => handleAction(item.name, 'discard')}
               className="px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-[var(--error-muted)] text-[var(--error)] border border-[rgba(248,113,113,0.2)] hover:bg-[rgba(248,113,113,0.15)] transition-colors"
             >
-              Drop
+              {t('inventory.drop')}
             </button>
           </div>
         )}
@@ -73,19 +75,19 @@ export default function InventoryPanel({ open, onClose, campaignId, inventory = 
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Hành Trang" size="md">
+    <Modal open={open} onClose={onClose} title={t('panel.inventory')} size="md">
       <div className="p-4 space-y-4">
-        {loading && <p className="text-center text-[var(--text-tertiary)] text-sm py-8">{`Đang tải...`}</p>}
+        {loading && <p className="text-center text-[var(--text-tertiary)] text-sm py-8">{t('generic.loading')}</p>}
 
         {!loading && inventory.length === 0 && (
           <div className="text-center py-8">
-            <p className="text-[var(--text-tertiary)] text-sm">{`Chưa có vật phẩm nào.`}</p>
+            <p className="text-[var(--text-tertiary)] text-sm">{t('inventory.empty')}</p>
           </div>
         )}
 
         {carriedItems.length > 0 && (
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-tertiary)] mb-2 px-1">{`Đang Mang`}</p>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-tertiary)] mb-2 px-1">{t('inventory.carried')}</p>
             <div className="space-y-1.5">
               {carriedItems.map((item) => (
                 <ItemRow key={item.name} item={item} isActive />
@@ -96,7 +98,7 @@ export default function InventoryPanel({ open, onClose, campaignId, inventory = 
 
         {expiredItems.length > 0 && (
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-tertiary)] mb-2 px-1">{`Đã Dùng / Đã Mất`}</p>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-tertiary)] mb-2 px-1">{t('inventory.usedLost')}</p>
             <div className="space-y-1.5">
               {expiredItems.map((item) => (
                 <ItemRow key={item.name} item={item} isActive={false} />

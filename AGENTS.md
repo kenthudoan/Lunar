@@ -343,6 +343,7 @@
 
 ## Feature Backlog (Post-MVP)
 
+- [x] **Admin Dashboard** — full admin panel: user management (search, pagination, detail drawer, toggle admin), scenario/campaign management (search, delete), and confirm modals for all destructive actions
 - [x] **NPC Minds** — private key-value thoughts per NPC (inspired by Inner-Self) + NPC Inspector panel
 - [x] **WorldMap View** — force-directed graph visualization of world entities (react-force-graph-2d)
 - [x] **Journal View** — categorized player diary UI (sidebar with category filters + real-time SSE updates)

@@ -1018,7 +1018,8 @@ class GameSession:
                 ),
             )
 
-        # Collect full response before sending to frontend (no streaming)
+        # Stream narrative to the client as the LLM emits chunks (token / sub-token deltas).
+        # We still accumulate full_response for cleanup, persistence, and side effects.
         context_window = self._get_context_window()
         full_response = ""
         async for chunk in self._narrator.stream_narrative(
@@ -1026,6 +1027,8 @@ class GameSession:
             context_window=context_window,
         ):
             full_response += chunk
+            if chunk:
+                yield chunk
 
         # Auto-continuation: if the response was truncated mid-sentence,
         # ask the LLM to finish instead of just trimming.
@@ -1044,14 +1047,15 @@ class GameSession:
                 context_window=context_window,
             ):
                 full_response += chunk
+                if chunk:
+                    yield chunk
 
-        # Final cleanup: trim truncation and fix number spacing
+        # Final cleanup: trim truncation and fix number spacing (may differ from streamed text)
         cleaned = self._clean_truncated_response(full_response)
         cleaned = self._fix_number_spacing(cleaned)
+        if cleaned != full_response:
+            yield f"[TRUNCATE_CLEAN]{cleaned}"
         full_response = cleaned
-
-        # Send the clean narrative to frontend (all at once)
-        yield full_response
 
         # Process inventory tags from response
         clean_response = full_response
@@ -1077,7 +1081,7 @@ class GameSession:
         )
 
         # Journal evaluation
-        entry = await self._journal.evaluate_and_log(self.campaign_id, clean_response)
+        entry = await self._journal.evaluate_and_log(self.campaign_id, clean_response, self.language)
         if self._is_journal_entry(entry):
             yield f"[JOURNAL]{json.dumps({'category': entry.category.value, 'summary': entry.summary, 'created_at': entry.created_at})}"
 
@@ -1346,7 +1350,7 @@ class GameSession:
         )
 
         # Journal evaluation for narrative
-        entry = await self._journal.evaluate_and_log(self.campaign_id, clean_response)
+        entry = await self._journal.evaluate_and_log(self.campaign_id, clean_response, self.language)
         if self._is_journal_entry(entry):
             yield f"[JOURNAL]{json.dumps({'category': entry.category.value, 'summary': entry.summary, 'created_at': entry.created_at})}"
 
@@ -1358,7 +1362,7 @@ class GameSession:
                 f"Player power: {self._player_power}. "
                 f"Outcome: {combat_outcome}. Quality: {combat_quality}/10."
             )
-            combat_entry = await self._journal.evaluate_and_log(self.campaign_id, combat_summary)
+            combat_entry = await self._journal.evaluate_and_log(self.campaign_id, combat_summary, self.language)
             if self._is_journal_entry(combat_entry):
                 yield f"[JOURNAL]{json.dumps({'category': combat_entry.category.value, 'summary': combat_entry.summary, 'created_at': combat_entry.created_at})}"
 
@@ -1568,7 +1572,7 @@ class GameSession:
 
     async def _try_auto_crystallize(self):
         try:
-            return await self._memory.auto_crystallize_if_needed(self.campaign_id)
+            return await self._memory.auto_crystallize_if_needed(self.campaign_id, language=self.language)
         except Exception:
             logger.warning("Auto-crystallization failed", exc_info=True)
             return None
@@ -1839,7 +1843,7 @@ class GameSession:
                 f"Player power: {self._player_power}. "
                 f"Outcome: {outcome_value}. Quality: {evaluation.final_quality}/10."
             )
-            combat_entry = await self._journal.evaluate_and_log(self.campaign_id, combat_summary)
+            combat_entry = await self._journal.evaluate_and_log(self.campaign_id, combat_summary, self.language)
             if self._is_journal_entry(combat_entry):
                 yield f"[JOURNAL]{json.dumps({'category': combat_entry.category.value, 'summary': combat_entry.summary, 'created_at': combat_entry.created_at})}"
         except Exception:
@@ -1886,23 +1890,34 @@ class GameSession:
                 f"match it to the full canonical name from this list."
             )
 
+        # Determine language for entity extraction
+        from app.utils.lang import lang_name as _lang_name
+        lang_name_val = _lang_name(self.language)
+        lang_upper = lang_name_val.upper()
+
+        system_prompt = (
+            "Extract named entities and their key attributes from this RPG narrative. "
+            "Return ONLY valid JSON (no markdown): "
+            '{\n  "entities": [\n    {"name": "<full name>", "type": "NPC|LOCATION|FACTION|ITEM|EVENT", '
+            '"attributes": {\n      "description": "<1-2 sentence description in ' + lang_name_val + ' if available>",\n'
+            '      "power_level": <int 1-10 for NPCs only>,\n'
+            '      "location_type": "<city|cave|forest|tavern|etc for LOCATION only>",\n'
+            '      "faction_type": "<guild|order|kingdom|etc for FACTION only>",\n'
+            '      "item_type": "<weapon|armor|potion|key|etc for ITEM only>"\n'
+            '    }\n    }\n  ],\n'
+            '  "relationships": [{"source": "<full name>", "target": "<full name>", "rel_type": "<MET|KNOWS|ALLIED_WITH|GUARDS|OWNS|LOCATED_IN|etc>"}]\n'
+            '}\n\n'
+            "IMPORTANT: Always use the FULL canonical name for each entity. "
+            "Never abbreviate to just a first name or last name. "
+            "Only include entities explicitly named in the narrative text. "
+            "Write ALL descriptions and attribute values IN " + lang_upper + ". "
+            "Fill in 'attributes' with any descriptive detail you can infer from the narrative. "
+            "If no attributes can be inferred, use an empty object {}."
+            + name_hint
+        )
+
         messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Extract named entities and relationships from this RPG narrative. "
-                    "Return ONLY valid JSON (no markdown): "
-                    '{"entities": [{"name": str, "type": "NPC|LOCATION|FACTION|ITEM|EVENT", '
-                    '"attributes": {}}], '
-                    '"relationships": [{"source": str, "target": str, "rel_type": str}]}. '
-                    "IMPORTANT: Always use the FULL canonical name for each entity. "
-                    "Never abbreviate to just a first name or last name — use the complete name as it appears in the narrative. "
-                    "For locations, use the most specific full name. "
-                    "Only include entities explicitly named in the text. "
-                    "rel_type should be a short verb phrase like GUARDS, LEADS, LOCATED_IN, OWNS, ALLIED_WITH, MET, KNOWS."
-                    + name_hint
-                ),
-            },
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": narrative_text},
         ]
         raw = await self._narrator._llm.complete(messages=messages, max_tokens=2048)
@@ -1914,20 +1929,29 @@ class GameSession:
 
         # Track name -> node_id for relationship creation
         name_to_id: dict[str, str] = {}
+        id_to_node: dict[str, WorldNode] = {}
 
         # First, get existing nodes to avoid duplicates
         existing = await self._graph.get_all_nodes()
         for node in existing:
             name_to_id[node.name.lower()] = node.id
+            id_to_node[node.id] = node
 
         for entity in data.get("entities", []):
             name = entity.get("name", "").strip()
             if not name:
                 continue
+            attributes = entity.get("attributes", {}) or {}
             existing_id = self._find_existing_node_id(name, name_to_id)
             if existing_id:
                 # Map this name variant to the existing node for relationship resolution
                 name_to_id[name.lower()] = existing_id
+                # Update attributes if the LLM provided richer info than we already have
+                if attributes:
+                    existing_node = id_to_node.get(existing_id)
+                    if existing_node:
+                        merged = {**existing_node.attributes, **attributes}
+                        await self._graph.update_node_attributes(existing_id, merged)
                 continue
             try:
                 node_type = WorldNodeType(entity.get("type", "NPC"))
@@ -1936,7 +1960,7 @@ class GameSession:
             node = await self._graph.add_node(
                 node_type=node_type,
                 name=name,
-                attributes=entity.get("attributes", {}),
+                attributes=attributes,
             )
             name_to_id[name.lower()] = node.id
 

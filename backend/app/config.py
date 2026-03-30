@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     anthropic_proxy_url: str = ""
     anthropic_proxy_key: str = "proxy"
     debug: bool = False
+    # Auth
+    jwt_secret_key: str = "dev-secret-change-in-production"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 60 * 24 * 7  # 7 days
 
     model_config = {"env_file": [".env", "../.env"]}
 

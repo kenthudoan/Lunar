@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.db.scenario_store import ScenarioStore, StoryCard, StoryCardType
 from app.utils.json_parsing import parse_json_list
+from app.utils.lang import lang_name
 
 
 class ScenarioService:
@@ -20,18 +21,8 @@ class ScenarioService:
 
         lang_hint = ""
         if language and language != "en":
-            lang_map = {
-                "pt-br": "Portuguese (Brazilian)",
-                "pt": "Portuguese",
-                "es": "Spanish",
-                "fr": "French",
-                "de": "German",
-                "ja": "Japanese",
-                "ko": "Korean",
-                "zh": "Chinese",
-            }
-            lang_name = lang_map.get(language, language)
-            lang_hint = f" IMPORTANT: The lore text is in {lang_name}. Preserve all names in their original language and write ALL content fields (personality, description, goals, secret, significance) in {lang_name}."
+            lang_name_val = lang_name(language)
+            lang_hint = f" IMPORTANT: The lore text is in {lang_name_val}. Preserve all names in their original language and write ALL content fields (personality, description, goals, secret, significance) in {lang_name_val}."
 
         messages = [
             {

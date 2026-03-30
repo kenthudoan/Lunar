@@ -38,6 +38,9 @@ _TICK_PROMPTS = {
 }
 
 
+from app.utils.lang import lang_name
+
+
 class WorldReactor:
     def __init__(self, llm):
         self._llm = llm
@@ -69,7 +72,7 @@ class WorldReactor:
 
         lang_hint = ""
         if language and language != "en":
-            lang_hint = f" Write your response in {language}."
+            lang_hint = f" Write your response in {lang_name(language)}."
 
         messages = [
             {

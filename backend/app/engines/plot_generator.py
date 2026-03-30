@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 
 from app.utils.json_parsing import parse_json_dict
+from app.utils.lang import lang_name
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +131,7 @@ class PlotGenerator:
         existing_npc_names: list[str] | None = None,
         tone_instructions: str = "",
     ) -> GeneratedNPC | None:
-        lang_hint = f" Write all text values in {language}." if language and language != "en" else ""
+        lang_hint = f" Write all text values in {lang_name(language)}." if language and language != "en" else ""
         recent_hint = f"\n\nRecent narrative:\n{recent_narrative}" if recent_narrative else ""
         tone_hint = f"\n\nScenario tone and setting:\n{tone_instructions[:2000]}" if tone_instructions else ""
         dedup_hint = ""
@@ -200,7 +201,7 @@ class PlotGenerator:
             if narrative_time >= 3600
             else f"{narrative_time // 60} minutes"
         )
-        lang_hint = f" Write all text values in {language}." if language and language != "en" else ""
+        lang_hint = f" Write all text values in {lang_name(language)}." if language and language != "en" else ""
         recent_hint = f"\nRecent narrative:\n{recent_narrative}" if recent_narrative else ""
         tone_hint = f"\nScenario tone and setting:\n{tone_instructions[:2000]}" if tone_instructions else ""
         messages = [
@@ -252,7 +253,7 @@ class PlotGenerator:
         recent_narrative: str = "",
         tone_instructions: str = "",
     ) -> str | None:
-        lang_hint = f" Write in {language}." if language and language != "en" else ""
+        lang_hint = f" Write in {lang_name(language)}." if language and language != "en" else ""
         recent_hint = f"\n\nRecent story summary:\n{recent_narrative}" if recent_narrative else ""
         tone_hint = f"\n\nScenario tone and setting:\n{tone_instructions[:2000]}" if tone_instructions else ""
         messages = [
@@ -299,7 +300,7 @@ class PlotGenerator:
         an NPC behaving oddly, an environmental clue, a sensory detail that hints
         at something deeper. The narrator integrates these naturally into its text.
         """
-        lang_hint = f" Write in {language}." if language and language != "en" else ""
+        lang_hint = f" Write in {lang_name(language)}." if language and language != "en" else ""
         tone_hint = f"\nScenario tone and setting:\n{tone_instructions[:2000]}" if tone_instructions else ""
         messages = [
             {

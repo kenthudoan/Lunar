@@ -1,7 +1,7 @@
 import logging
 import os
 from dataclasses import asdict
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -19,6 +19,7 @@ from app.engines.inventory_engine import InventoryEngine
 from app.engines.llm_router import LLMRouter, LLMConfig, LLMProvider
 from app.db.event_store import EventStore, EventType
 from app.db.scenario_store import ScenarioStore
+from app.middleware.auth import AuthUser, get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -254,8 +255,22 @@ def _get_graph_engine(campaign_id: str):
         return None
 
 
+def _require_campaign_access(campaign_id: str, current_user: AuthUser) -> None:
+    """Verify the current user owns this campaign (or is admin). Raises 403 otherwise."""
+    store = ScenarioStore(_SCENARIO_DB_PATH)
+    try:
+        campaign = store.get_campaign(campaign_id)
+    finally:
+        store.close()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.user_id and campaign.user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized to access this campaign")
+
+
 @router.post("/action")
-async def player_action(req: PlayerActionRequest):
+async def player_action(req: PlayerActionRequest, current_user: AuthUser = Depends(get_current_user)):
+    _require_campaign_access(req.campaign_id, current_user)
     session = _ensure_session(req.campaign_id)
     # Update session with request-specific values that may differ per action
     session.scenario_tone = req.scenario_tone or session.scenario_tone
@@ -283,7 +298,8 @@ async def player_action(req: PlayerActionRequest):
 
 
 @router.get("/{campaign_id}/history")
-async def get_history(campaign_id: str):
+async def get_history(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
+    _require_campaign_access(campaign_id, current_user)
     """Return PLAYER_ACTION and NARRATOR_RESPONSE events to rebuild chat UI."""
     events = _event_store.get_by_type(campaign_id, EventType.PLAYER_ACTION) + \
              _event_store.get_by_type(campaign_id, EventType.NARRATOR_RESPONSE)
@@ -299,7 +315,8 @@ async def get_history(campaign_id: str):
 
 
 @router.post("/{campaign_id}/rewind")
-async def rewind(campaign_id: str):
+async def rewind(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
+    _require_campaign_access(campaign_id, current_user)
     """Delete the last player action + AI response and return updated history."""
     deleted = _event_store.delete_last_pair(campaign_id)
     if deleted == 0:
@@ -324,7 +341,8 @@ async def rewind(campaign_id: str):
 
 
 @router.get("/{campaign_id}/journal")
-async def get_journal(campaign_id: str, category: str | None = None):
+async def get_journal(campaign_id: str, current_user: AuthUser = Depends(get_current_user), category: str | None = None):
+    _require_campaign_access(campaign_id, current_user)
     _ensure_session(campaign_id)
     if category:
         try:
@@ -338,14 +356,16 @@ async def get_journal(campaign_id: str, category: str | None = None):
 
 
 @router.get("/{campaign_id}/npc-minds")
-async def get_npc_minds(campaign_id: str):
+async def get_npc_minds(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
+    _require_campaign_access(campaign_id, current_user)
     _ensure_session(campaign_id)
     minds = _npc_minds.get_all_minds(campaign_id)
     return [m.to_dict() for m in minds]
 
 
 @router.get("/{campaign_id}/characters")
-async def get_characters(campaign_id: str, q: str = ""):
+async def get_characters(campaign_id: str, current_user: AuthUser = Depends(get_current_user), q: str = ""):
+    _require_campaign_access(campaign_id, current_user)
     """List all known characters/entities for @-mention autocomplete.
 
     Returns NPCs from NpcMindEngine + entities from GraphEngine (if available).
@@ -398,7 +418,8 @@ async def get_characters(campaign_id: str, q: str = ""):
 
 
 @router.get("/{campaign_id}/memory-crystals")
-async def get_memory_crystals(campaign_id: str):
+async def get_memory_crystals(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
+    _require_campaign_access(campaign_id, current_user)
     _ensure_session(campaign_id)
     crystals = _memory.get_crystals(campaign_id)
     return [
@@ -412,8 +433,10 @@ async def get_memory_crystals(campaign_id: str):
 
 
 @router.post("/{campaign_id}/crystallize")
-async def crystallize_memory(campaign_id: str):
-    crystal = await _memory.crystallize(campaign_id, CrystalTier.SHORT)
+async def crystallize_memory(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
+    _require_campaign_access(campaign_id, current_user)
+    _, language, _ = _load_scenario_for_campaign(campaign_id)
+    crystal = await _memory.crystallize(campaign_id, CrystalTier.SHORT, language=language)
     return {
         "tier": crystal.tier.value,
         "content": crystal.content,
@@ -422,7 +445,8 @@ async def crystallize_memory(campaign_id: str):
 
 
 @router.post("/{campaign_id}/generate")
-async def generate_content(campaign_id: str, req: GenerateRequest):
+async def generate_content(campaign_id: str, req: GenerateRequest, current_user: AuthUser = Depends(get_current_user)):
+    _require_campaign_access(campaign_id, current_user)
     world_ctx = _memory.build_context_window(campaign_id)
     if req.type == "npc":
         npc = await _plot_generator.generate_npc(world_ctx, language=req.language)
@@ -438,7 +462,8 @@ async def generate_content(campaign_id: str, req: GenerateRequest):
 
 
 @router.post("/{campaign_id}/inject-npc-seed")
-async def inject_npc_seed(campaign_id: str, req: GenerateRequest):
+async def inject_npc_seed(campaign_id: str, req: GenerateRequest, current_user: AuthUser = Depends(get_current_user)):
+    _require_campaign_access(campaign_id, current_user)
     """Generate an NPC and inject it as a pending seed in the active session."""
     if campaign_id not in _sessions:
         raise HTTPException(404, "No active session for this campaign")
@@ -458,7 +483,8 @@ async def inject_npc_seed(campaign_id: str, req: GenerateRequest):
 
 
 @router.post("/{campaign_id}/timeskip")
-async def timeskip(campaign_id: str, req: TimeskipRequest):
+async def timeskip(campaign_id: str, req: TimeskipRequest, current_user: AuthUser = Depends(get_current_user)):
+    _require_campaign_access(campaign_id, current_user)
     _event_store.append(
         campaign_id=campaign_id,
         event_type=EventType.TIMESKIP,
@@ -485,21 +511,23 @@ async def timeskip(campaign_id: str, req: TimeskipRequest):
             entities=[],
         )
         try:
-            await _journal.evaluate_and_log(campaign_id, world_changes)
+            await _journal.evaluate_and_log(campaign_id, world_changes, session_language)
         except Exception:
             logger.warning("Failed to log timeskip world changes into journal", exc_info=True)
     return {"summary": world_changes or "Time passes quietly."}
 
 
 @router.get("/{campaign_id}/inventory")
-async def get_inventory(campaign_id: str):
+async def get_inventory(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
+    _require_campaign_access(campaign_id, current_user)
     _ensure_session(campaign_id)
     items = _inventory.get_inventory(campaign_id)
     return [{"name": i.name, "category": i.category, "source": i.source, "status": i.status} for i in items]
 
 
 @router.post("/{campaign_id}/inventory")
-async def update_inventory(campaign_id: str, req: InventoryActionRequest):
+async def update_inventory(campaign_id: str, req: InventoryActionRequest, current_user: AuthUser = Depends(get_current_user)):
+    _require_campaign_access(campaign_id, current_user)
     if req.action == "use":
         _inventory.use_item(campaign_id, req.name)
     elif req.action == "discard":
@@ -508,7 +536,8 @@ async def update_inventory(campaign_id: str, req: InventoryActionRequest):
 
 
 @router.get("/{campaign_id}/graph-search")
-async def graph_search(campaign_id: str, q: str = ""):
+async def graph_search(campaign_id: str, current_user: AuthUser = Depends(get_current_user), q: str = ""):
+    _require_campaign_access(campaign_id, current_user)
     if not q:
         return {"facts": []}
 
@@ -524,7 +553,8 @@ async def graph_search(campaign_id: str, q: str = ""):
 
 
 @router.get("/{campaign_id}/world-graph")
-async def get_world_graph(campaign_id: str):
+async def get_world_graph(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
+    _require_campaign_access(campaign_id, current_user)
     try:
         engine = _get_graph_engine(campaign_id)
         if not engine:

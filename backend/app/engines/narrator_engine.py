@@ -16,6 +16,9 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+from app.utils.lang import lang_name
+
+
 class NarrativeMode(str, Enum):
     NARRATIVE = "NARRATIVE"
     COMBAT = "COMBAT"
@@ -26,6 +29,7 @@ _DEFAULT_META = {"mode": "NARRATIVE", "ambush": False, "narrative_time_seconds":
 
 _LANGUAGE_INSTRUCTIONS = {
     "en": "Respond in English.",
+    "vi": "Hãy phản hồi bằng tiếng Việt.",
     "pt-br": "Responda em português brasileiro (pt-br).",
 }
 
@@ -197,7 +201,7 @@ class NarratorEngine:
     ) -> str:
         lang_instruction = _LANGUAGE_INSTRUCTIONS.get(
             language,
-            f"Respond in the language: {language}.",
+            f"Respond in the language: {lang_name(language)}.",
         )
         sections = [
             f"You are an AI narrator for an interactive RPG story. {lang_instruction}",
@@ -244,7 +248,7 @@ class NarratorEngine:
         """
         lang_instruction = _LANGUAGE_INSTRUCTIONS.get(
             language,
-            f"Respond in the language: {language}.",
+            f"Respond in the language: {lang_name(language)}.",
         )
 
         # Static: same for every action in this scenario
@@ -285,7 +289,7 @@ class NarratorEngine:
     ) -> str:
         lang_instruction = _LANGUAGE_INSTRUCTIONS.get(
             language,
-            f"Respond in the language: {language}.",
+            f"Respond in the language: {lang_name(language)}.",
         )
         sections = [
             f"You are a Game Master assistant for this RPG campaign. {lang_instruction}",

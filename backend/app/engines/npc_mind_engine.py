@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.utils.json_parsing import parse_json_dict
+from app.utils.lang import lang_name
 
 
 @dataclass
@@ -219,7 +220,7 @@ class NpcMindEngine:
 
         prompt_text = _NPC_MIND_PROMPTS.get(language, _NPC_MIND_PROMPTS["en"])
         if language and language != "en" and language not in _NPC_MIND_PROMPTS:
-            prompt_text += f" Write all thought values in the same language as the narrative ({language})."
+            prompt_text += f" Write all thought values in the same language as the narrative ({lang_name(language)})."
 
         messages = [
             {

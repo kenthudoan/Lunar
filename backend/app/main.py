@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -12,7 +12,10 @@ else:
     logging.basicConfig(level=logging.INFO)
 from app.api.routes_scenarios import router as scenarios_router
 from app.api.routes_game import router as game_router, _llm
+from app.api.routes_auth import router as auth_router
+from app.api.routes_admin import router as admin_router
 from app.engines.llm_router import LLMConfig, LLMProvider
+from app.middleware.auth import get_current_user, AuthUser
 
 app = FastAPI(title="Project Lunar", version="0.1.0")
 
@@ -20,6 +23,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
+        "http://localhost:5174",
         "http://localhost:3000",
     ],
     allow_credentials=True,
@@ -27,6 +31,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
 app.include_router(scenarios_router, prefix="/api/scenarios", tags=["scenarios"])
 app.include_router(game_router, prefix="/api/game", tags=["game"])
 
@@ -60,7 +66,7 @@ class SettingsUpdateRequest(BaseModel):
 
 
 @app.post("/api/settings")
-def update_settings(req: SettingsUpdateRequest):
+def update_settings(req: SettingsUpdateRequest, _=Depends(get_current_user)):
     try:
         provider = LLMProvider(req.provider)
     except ValueError:
@@ -75,7 +81,7 @@ def update_settings(req: SettingsUpdateRequest):
 
 
 @app.get("/api/settings")
-def get_settings():
+def get_settings(_=Depends(get_current_user)):
     return {
         "provider": _llm.config.primary_provider.value,
         "model": _llm.config.primary_model,
