@@ -342,6 +342,7 @@ class NarratorEngine:
         system_prompt: str,
         history: list[dict],
         context_window: int = 64_000,
+        language: str = "en",
     ) -> AsyncIterator[str]:
         system_tokens = estimate_tokens(system_prompt)
         history_slice = self._dynamic_history_slice(history, context_window, system_tokens)
@@ -376,7 +377,7 @@ class NarratorEngine:
                 full_response += chunk
                 yield chunk
         except Exception:
-            yield self._fallback_narrative(player_input)
+            yield self._fallback_narrative(player_input, language=language)
 
         # Debug logging: log full response
         logger.debug(
@@ -419,6 +420,7 @@ class NarratorEngine:
         canonical_names: list[str] | None = None,
         max_tokens: int = 2000,
         context_window: int = 200_000,
+        language: str = "en",
     ) -> dict:
         """Single LLM call that returns narrative + all side-effect data as JSON.
 
@@ -520,7 +522,7 @@ class NarratorEngine:
             "mode": "NARRATIVE",
             "narrative_time_seconds": 60,
             "ambush": False,
-            "narrative_text": self._fallback_narrative(player_input),
+            "narrative_text": self._fallback_narrative(player_input, language=language),
             "npc_thoughts": [],
             "entities": [],
             "relationships": [],
@@ -571,9 +573,24 @@ class NarratorEngine:
         return 60
 
     @staticmethod
-    def _fallback_narrative(player_input: str) -> str:
-        return (
-            "The world shifts in response to your action. "
-            f"You proceed with intent: {player_input} "
-            "Tension rises as the consequences begin to unfold."
+    def _fallback_narrative(player_input: str, language: str = "en") -> str:
+        _fallback_map = {
+            "vi": (
+                "Thế giới thay đổi theo hành động của bạn. "
+                f"Bạn tiến với ý định: {player_input} "
+                "Sự căng thẳng dâng cao khi hậu quả bắt đầu hiển hiện."
+            ),
+            "pt-br": (
+                "O mundo muda em resposta à sua ação. "
+                f"Você prossegue com intenção: {player_input} "
+                "A tensão aumenta enquanto as consequências começam a se desenrolar."
+            ),
+        }
+        return _fallback_map.get(
+            language,
+            (
+                "The world shifts in response to your action. "
+                f"You proceed with intent: {player_input} "
+                "Tension rises as the consequences begin to unfold."
+            ),
         )

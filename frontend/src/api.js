@@ -1,3 +1,6 @@
+import { INTERNAL_TAG_STRIP_REGEX, stripPowerControlTags } from './utils/mentionRegex'
+import { mergeCampaignPatch } from './utils/campaignStorage'
+
 const BASE = '/api'  // proxied to http://localhost:8000 via vite proxy
 const TOKEN_KEY = 'lunar_token'
 
@@ -205,6 +208,19 @@ export async function fetchHistory(campaignId) {
   return r.json()
 }
 
+/** Scenario snapshot for Play header / opening — survives reload when localStorage lost `scenario`. */
+export async function fetchCampaignScenario(campaignId) {
+  const r = await fetch(`${BASE}/game/${campaignId}/scenario`, { headers: authHeader() })
+  if (!r.ok) return null
+  return r.json()
+}
+
+export async function getPendingAction(campaignId) {
+  const r = await fetch(`${BASE}/game/${campaignId}/pending-action`, { headers: authHeader() })
+  if (!r.ok) throw new Error('Failed to check pending action')
+  return r.json()
+}
+
 export async function fetchCharacters(campaignId, query = '') {
   const params = query ? `?q=${encodeURIComponent(query)}` : ''
   const r = await fetch(`${BASE}/game/${campaignId}/characters${params}`, { headers: authHeader() })
@@ -217,7 +233,14 @@ export function streamAction({
   maxTokens, provider, model, temperature,
   onChunk, onJournal, onMode, onCrystal, onPlotAuto, onInventory,
   onTruncateClean, onDone, onError,
+  onPendingActionId,
 }) {
+  // Generate a pending ID so we can detect incomplete responses after reload
+  const pendingId = `pending-${campaignId}-${Date.now()}`
+  // Persist immediately (before fetch) so reload mid-stream always sees a marker — does not depend on Zustand activeCampaignId
+  mergeCampaignPatch(campaignId, { pendingActionId: pendingId })
+  onPendingActionId?.(pendingId)
+
   fetch(`${BASE}/game/action`, {
     method: 'POST',
     headers: authHeader({ 'Content-Type': 'application/json' }),
@@ -234,6 +257,13 @@ export function streamAction({
     }),
   })
     .then(async (res) => {
+      if (res.status === 409) {
+        // Server says this campaign is already streaming a response.
+        // The in-flight stream is still running — just show the streaming indicator.
+        // When it completes the user will see the full response.
+        onDone?.()
+        return
+      }
       if (!res.ok) throw new Error('Action request failed')
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
@@ -247,11 +277,16 @@ export function streamAction({
         if (control.startsWith('[CRYSTAL]')) { try { onCrystal?.(JSON.parse(control.slice(9))) } catch {} return false }
         if (control.startsWith('[PLOT_AUTO]')) { try { onPlotAuto?.(JSON.parse(control.slice(11))) } catch {} return false }
         if (control.startsWith('[INVENTORY]')) { try { onInventory?.(JSON.parse(control.slice(11))) } catch {} return false }
+        if (control.startsWith('[POWER]')) {
+          try {
+            const rest = control.slice(7).trim()
+            if (rest.startsWith('{')) onPower?.(JSON.parse(rest))
+          } catch { /* ignore */ }
+          return false
+        }
         if (control.startsWith('[TRUNCATE_CLEAN]')) { onTruncateClean?.(control.slice(16)); return false }
-        const cleaned = data
-          .replace(/\[ITEM_ADD:[^\]]+\]/g, '')
-          .replace(/\[ITEM_USE:[^\]]+\]/g, '')
-          .replace(/\[ITEM_LOSE:[^\]]+\]/g, '')
+        let cleaned = stripPowerControlTags(data)
+        cleaned = cleaned.replace(INTERNAL_TAG_STRIP_REGEX, '')
         if (cleaned.trim()) onChunk?.(cleaned)
         return false
       }
@@ -361,6 +396,16 @@ export async function generateContent(campaignId, type, language = 'en') {
     body: JSON.stringify({ type, language }),
   })
   if (!r.ok) throw new Error('Generation failed')
+  return r.json()
+}
+
+export async function injectPlotContent(campaignId, type, data, language = 'en') {
+  const r = await fetch(`${BASE}/game/${campaignId}/inject-plot`, {
+    method: 'POST',
+    headers: authHeader({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ type, data, language }),
+  })
+  if (!r.ok) throw new Error('Inject failed')
   return r.json()
 }
 

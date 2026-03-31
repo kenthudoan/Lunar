@@ -16,22 +16,56 @@ def _is_none_response(raw: str) -> bool:
     return raw.strip().lower() in _NONE_MARKERS
 
 
-_CONTEXT_RULES = (
-    "\n\nCONTEXT RULES — READ CAREFULLY:\n"
-    "- The generated content MUST fit naturally into the current scene and narrative moment.\n"
-    "- Respect the tone and setting described in the scenario instructions.\n"
-    "- Do NOT introduce elements that contradict or overshadow the current scene.\n"
-    "- Do NOT reveal major plot secrets or endgame-level threats prematurely.\n"
-    "- Do NOT introduce characters or events that belong to a later narrative arc "
-    "(e.g., don't introduce academy characters during the family arc, don't introduce "
-    "dragons or world-level threats in the early story).\n"
-    "- The content should ADD to the current moment, not derail it.\n"
-    "- If the current scene is tense/dramatic (combat, confrontation, ceremony), "
-    "do NOT interrupt it with unrelated content.\n"
-    "\nCRITICAL: If generating something right now would feel forced, unnatural, "
-    "or would break the flow of the current scene, respond with ONLY the word: NONE\n"
-    "Responding NONE is ALWAYS acceptable and preferred over generating bad content."
-)
+_CONTEXT_RULES = {
+    "en": (
+        "\n\nCONTEXT RULES — READ CAREFULLY:\n"
+        "- The generated content MUST fit naturally into the current scene and narrative moment.\n"
+        "- Respect the tone and setting described in the scenario instructions.\n"
+        "- Do NOT introduce elements that contradict or overshadow the current scene.\n"
+        "- Do NOT reveal major plot secrets or endgame-level threats prematurely.\n"
+        "- Do NOT introduce characters or events that belong to a later narrative arc "
+        "(e.g., don't introduce academy characters during the family arc, don't introduce "
+        "dragons or world-level threats in the early story).\n"
+        "- The content should ADD to the current moment, not derail it.\n"
+        "- If the current scene is tense/dramatic (combat, confrontation, ceremony), "
+        "do NOT interrupt it with unrelated content.\n"
+        "\nCRITICAL: If generating something right now would feel forced, unnatural, "
+        "or would break the flow of the current scene, respond with ONLY the word: NONE\n"
+        "Responding NONE is ALWAYS acceptable and preferred over generating bad content."
+    ),
+    "vi": (
+        "\n\nQUY TẮC NGỮ CẢNH — ĐỌC KỸ:\n"
+        "- Nội dung được tạo phải PHÙ HỢP một cách tự nhiên với cảnh hiện tại và khoảnh khắc tường thuật.\n"
+        "- Tôn trọng giọng điệu và bối cảnh được mô tả trong hướng dẫn kịch bản.\n"
+        "- KHÔNG giới thiệu các yếu tố mâu thuẫn hoặc lấn át cảnh hiện tại.\n"
+        "- KHÔNG tiết lộ bí mật cốt truyện chính hoặc mối đe dọa cấp endgame sớm.\n"
+        "- KHÔNG giới thiệu nhân vật hoặc sự kiện thuộc về một arc tường thuật sau này.\n"
+        "- Nội dung nên BỔ SUNG vào khoảnh khắc hiện tại, không phá hỏng nó.\n"
+        "- Nếu cảnh hiện tại căng thẳng/drama (chiến đấu, đối đầu, nghi lễ), "
+        "KHÔNG làm gián đoạn nó bằng nội dung không liên quan.\n"
+        "\nQUAN TRỌNG: Nếu việc tạo nội dung ngay bây giờ cảm thấy gượng ép, không tự nhiên, "
+        "hoặc sẽ phá vỡ luồng của cảnh hiện tại, hãy trả lời CHỈ bằng một từ: NONE\n"
+        "Trả lời NONE LUÔN được chấp nhận và được ưu tiên hơn việc tạo nội dung kém."
+    ),
+    "pt-br": (
+        "\n\nREGRAS DE CONTEXTO — LEIA COM ATENÇÃO:\n"
+        "- O conteúdo gerado DEVE se encaixar naturalmente na cena e momento narrativo atual.\n"
+        "- Respeite o tom e cenário descrito nas instruções do cenário.\n"
+        "- NÃO introduza elementos que contradigam ou ofusquem a cena atual.\n"
+        "- NÃO revele segredos principais da trama ou ameaças de nível endgame prematuramente.\n"
+        "- NÃO introduza personagens ou eventos que pertençam a um arco narrativo posterior.\n"
+        "- O conteúdo deve ADICIONAR ao momento atual, não desviá-lo.\n"
+        "- Se a cena atual for tensa/dramática (combate, confronto, cerimônia), "
+        "NÃO a interrompa com conteúdo não relacionado.\n"
+        "\nCRÍTICO: Se gerar algo agora parecer forçado, antinatural, "
+        "ou quebrar o fluxo da cena atual, responda apenas com a palavra: NONE\n"
+        "Responder NONE é SEMPRE aceitável e preferível a gerar conteúdo ruim."
+    ),
+}
+
+
+def _get_context_rules(language: str) -> str:
+    return _CONTEXT_RULES.get(language, _CONTEXT_RULES["en"])
 
 
 @dataclass
@@ -154,7 +188,7 @@ class PlotGenerator:
                     "Return ONLY valid JSON (no markdown): "
                     '{"name": str, "personality": str, "power_level": int (1-10), '
                     f'"secret": str, "goal": str, "appearance": str}}.{lang_hint}'
-                    f"{_CONTEXT_RULES}"
+                    f"{_get_context_rules(language)}"
                 ),
             },
             {"role": "user", "content": f"World context:\n{world_context}{tone_hint}{recent_hint}{dedup_hint}"},
@@ -213,7 +247,7 @@ class PlotGenerator:
                     "not forced or out of place. "
                     "Return ONLY valid JSON: "
                     f'{{"title": str, "description": str, "choices": [str, str, str]}}.{lang_hint}'
-                    f"{_CONTEXT_RULES}"
+                    f"{_get_context_rules(language)}"
                 ),
             },
             {
@@ -272,7 +306,7 @@ class PlotGenerator:
                     "Write 2-3 sentences describing WHAT will happen in the future, "
                     "not what is happening now. Think of it as a TV show's next-episode teaser. "
                     f"No lists or headers.{lang_hint}"
-                    f"{_CONTEXT_RULES}"
+                    f"{_get_context_rules(language)}"
                 ),
             },
             {"role": "user", "content": f"World context:\n{world_context}{tone_hint}{recent_hint}"},
@@ -317,7 +351,7 @@ class PlotGenerator:
                     "- A character notices something no one else does\n"
                     "Write ONE sentence describing the detail. Be specific to the "
                     f"current scene.{lang_hint}"
-                    f"{_CONTEXT_RULES}"
+                    f"{_get_context_rules(language)}"
                 ),
             },
             {

@@ -76,10 +76,14 @@ class MemoryEngine:
             events = self._store.get_recent(campaign_id, limit=self.MAX_CRYSTALLIZE_EVENTS)
 
         if not events:
+            _empty_crystal_content = {
+                "vi": "Chưa có cập nhật nào đáng chú ý.",
+                "pt-br": "Nenhuma atualização significativa registrada ainda.",
+            }
             crystal = MemoryCrystal(
                 campaign_id=campaign_id,
                 tier=tier,
-                content=lang_name(language) == "Vietnamese" and "Chưa có cập nhật nào đáng chú ý." or "No meaningful updates yet.",
+                content=_empty_crystal_content.get(language, "No meaningful updates yet."),
                 ai_content="MEM:EMPTY",
                 event_count=0,
             )
@@ -210,6 +214,7 @@ class MemoryEngine:
     def _fallback_player_summary(events: list[Event], language: str = "en") -> str:
         _fallback_text = {
             "vi": "Không có sự kiện quan trọng nào được ghi nhận gần đây.",
+            "pt-br": "Nenhum evento significativo foi registrado recentemente.",
         }
         fallback = _fallback_text.get(language, "No significant events were recorded recently.")
         snippets: list[str] = []

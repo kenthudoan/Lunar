@@ -46,6 +46,23 @@ export const useGameStore = create((set, get) => ({
   temperature: 0.85,
   maxTokens: 2000,
 
+  // Reading preferences
+  readingFont: 'font-prose',   // CSS var name for narrative font
+  fontSize: 16.5,              // base font size in px
+
+  // ---- Apply reading font to <html> and CSS vars ----
+  _applyReadingFont: (fontFamilyVar, fontSize) => {
+    const root = document.documentElement
+    const FONT_MAP = {
+      'font-prose':       'var(--font-prose)',
+      'font-reading-1':   'var(--font-reading-1)',
+      'font-reading-2':   'var(--font-reading-2)',
+      'font-reading-3':   'var(--font-reading-3)',
+    }
+    root.style.setProperty('--reading-font-family', FONT_MAP[fontFamilyVar] || 'var(--font-prose)')
+    root.style.setProperty('--reading-font-size', `${fontSize}px`)
+  },
+
   // Auth actions
   login: async ({ email, password }) => {
     const data = await apiLogin(email, password)
@@ -128,6 +145,14 @@ export const useGameStore = create((set, get) => ({
       const current = JSON.parse(localStorage.getItem('lunar_settings') || '{}')
       localStorage.setItem('lunar_settings', JSON.stringify({ ...current, ...settings }))
     } catch {}
+    // Apply reading font immediately if changed
+    if (settings.readingFont || settings.fontSize != null) {
+      const { readingFont: rf, fontSize: fs, _applyReadingFont } = get()
+      _applyReadingFont(
+        settings.readingFont ?? rf,
+        settings.fontSize != null ? settings.fontSize : fs,
+      )
+    }
     return set(settings)
   },
 
@@ -139,7 +164,17 @@ export const useGameStore = create((set, get) => ({
       if (s.llmModel) restored.llmModel = s.llmModel
       if (s.temperature != null) restored.temperature = s.temperature
       if (s.maxTokens != null) restored.maxTokens = s.maxTokens
+      if (s.readingFont) restored.readingFont = s.readingFont
+      if (s.fontSize != null) restored.fontSize = s.fontSize
       if (Object.keys(restored).length > 0) set(restored)
+      // Re-apply reading font from persisted settings
+      if (restored.readingFont || restored.fontSize != null) {
+        const { _applyReadingFont } = get()
+        _applyReadingFont(
+          restored.readingFont || 'font-prose',
+          restored.fontSize != null ? restored.fontSize : 16.5,
+        )
+      }
     } catch {}
   },
 
@@ -159,22 +194,41 @@ export const useGameStore = create((set, get) => ({
       inventory: saved.inventory || [],
       isStreaming: false,
       combatMode: false,
+      pendingActionId: saved.pendingActionId || null,
     }
     set(patch)
     return patch
   },
 
+  setPendingActionId: (id) => {
+    set({ pendingActionId: id })
+    const { activeCampaignId } = get()
+    if (activeCampaignId) {
+      persistCampaignState(activeCampaignId, { pendingActionId: id })
+    }
+  },
+
+  clearPendingActionId: () => {
+    set({ pendingActionId: null })
+    const { activeCampaignId } = get()
+    if (activeCampaignId) {
+      persistCampaignState(activeCampaignId, { pendingActionId: null })
+    }
+  },
+
   // Persist the current campaign's state to localStorage.
   // Call this whenever play state changes.
   _persistCampaign: () => {
-    const { activeCampaignId, messages, chapters, journal, inventory, activeScenario } = get()
+    const { activeCampaignId, messages, chapters, journal, inventory, activeScenario, pendingActionId } = get()
     if (!activeCampaignId) return
+    const prev = loadAllCampaigns()[activeCampaignId] || {}
     persistCampaignState(activeCampaignId, {
-      scenario: activeScenario,
+      scenario: activeScenario != null ? activeScenario : (prev.scenario ?? null),
       messages,
       chapters,
       journal,
       inventory,
+      pendingActionId,
     })
   },
 

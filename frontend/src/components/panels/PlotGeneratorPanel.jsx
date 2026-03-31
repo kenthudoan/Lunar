@@ -13,10 +13,21 @@ export default function PlotGeneratorPanel({ open, onClose, campaignId, language
   const [tab, setTab] = useState('npc')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
+  const [injecting, setInjecting] = useState(false)
+  /** 'success' | 'error' | null — không dùng summary dài từ API làm nhãn nút */
+  const [injectStatus, setInjectStatus] = useState(null)
+
+  const injectButtonLabel = () => {
+    if (injecting) return null
+    if (injectStatus === 'success') return t('plot.injectedOk')
+    if (injectStatus === 'error') return t('plot.injectFailed')
+    return t('plot.injectIntoStory')
+  }
 
   const generate = async (type) => {
     setLoading(true)
     setResult(null)
+    setInjectStatus(null)
     try {
       const { generateContent } = await import('../../api')
       const data = await generateContent(campaignId, type, language)
@@ -28,15 +39,31 @@ export default function PlotGeneratorPanel({ open, onClose, campaignId, language
     }
   }
 
+  const handleInject = async () => {
+    if (!result?.data) return
+    setInjecting(true)
+    try {
+      const { injectPlotContent } = await import('../../api')
+      await injectPlotContent(campaignId, result.type, result.data, language)
+      setInjectStatus('success')
+    } catch {
+      setInjectStatus('error')
+    } finally {
+      setInjecting(false)
+    }
+  }
+
+  const reset = () => { setResult(null); setInjectStatus(null) }
+
   return (
-    <Modal open={open} onClose={onClose} title={t('panel.plotGenerator')} size="md">
+    <Modal open={open} onClose={() => { onClose(); reset() }} title={t('panel.plotGenerator')} size="md">
       <div className="p-4 space-y-4">
         {/* Tabs */}
         <div className="flex gap-1">
           {TABS.map((t_item) => (
             <button
               key={t_item.id}
-              onClick={() => { setTab(t_item.id); setResult(null) }}
+              onClick={() => { setTab(t_item.id); setResult(null); setInjectStatus(null) }}
               className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold uppercase tracking-widest transition-all border ${tab === t_item.id ? 'bg-[var(--accent-muted)] border-[var(--border-strong)] text-[var(--text-primary)]' : 'bg-transparent border-transparent text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] hover:bg-[var(--accent-muted)]'}`}
             >
               <t_item.icon />
@@ -63,39 +90,99 @@ export default function PlotGeneratorPanel({ open, onClose, campaignId, language
           ) : t('plot.generate', { type: t(TABS.find((t_item) => t_item.id === tab)?.labelKey || '') })}
         </button>
 
-        {/* Result */}
+        {/* Error */}
         {result?.error && (
           <div className="p-4 rounded-xl bg-[var(--error-muted)] border border-[rgba(248,113,113,0.2)] text-[var(--error)] text-sm">{result.error}</div>
         )}
+
+        {/* NPC Result */}
         {result?.data && result.type === 'npc' && (
-          <div className="p-4 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] space-y-2">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-semibold text-[var(--text-primary)]">{result.data.name}</h3>
-              <span className="badge badge-warning">Power {result.data.power_level}/10</span>
-            </div>
-            <p className="text-sm text-[var(--text-secondary)]">{result.data.appearance}</p>
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div><span className="text-[var(--text-tertiary)] uppercase tracking-wider text-[10px] font-bold block mb-1">{t('plot.personality')}</span><p className="text-[var(--text-secondary)]">{result.data.personality}</p></div>
-              <div><span className="text-[var(--text-tertiary)] uppercase tracking-wider text-[10px] font-bold block mb-1">{t('npc.goal')}</span><p className="text-[var(--text-secondary)]">{result.data.goal}</p></div>
-              <div className="col-span-2"><span className="text-[var(--text-tertiary)] uppercase tracking-wider text-[10px] font-bold block mb-1">{t('plot.secret')}</span><p className="text-[var(--text-secondary)] italic">{result.data.secret}</p></div>
-            </div>
-          </div>
-        )}
-        {result?.data && result.type === 'event' && (
-          <div className="p-4 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] space-y-2">
-            <h3 className="text-base font-semibold text-[var(--text-primary)]">{result.data.title}</h3>
-            <p className="text-sm text-[var(--text-secondary)] font-light leading-relaxed">{result.data.description}</p>
-            {result.data.choices?.length > 0 && (
-              <div>
-                <span className="text-[var(--text-tertiary)] uppercase tracking-wider text-[10px] font-bold block mb-2">{t('plot.choices')}</span>
-                {result.data.choices.map((c, i) => <div key={i} className="text-sm text-[var(--text-secondary)] py-0.5"><span className="text-[var(--text-tertiary)] font-mono text-xs mr-2">{i + 1}.</span>{c}</div>)}
+          <div className="space-y-3">
+            <div className="p-4 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-semibold text-[var(--text-primary)]">{result.data.name}</h3>
+                <span className="badge badge-warning">Power {result.data.power_level}/10</span>
               </div>
-            )}
+              <p className="text-sm text-[var(--text-secondary)]">{result.data.appearance}</p>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div><span className="text-[var(--text-tertiary)] uppercase tracking-wider text-[10px] font-bold block mb-1">{t('plot.personality')}</span><p className="text-[var(--text-secondary)]">{result.data.personality}</p></div>
+                <div><span className="text-[var(--text-tertiary)] uppercase tracking-wider text-[10px] font-bold block mb-1">{t('npc.goal')}</span><p className="text-[var(--text-secondary)]">{result.data.goal}</p></div>
+                <div className="col-span-2"><span className="text-[var(--text-tertiary)] uppercase tracking-wider text-[10px] font-bold block mb-1">{t('plot.secret')}</span><p className="text-[var(--text-secondary)] italic">{result.data.secret}</p></div>
+              </div>
+            </div>
+            <button
+              onClick={handleInject}
+              disabled={injecting || injectStatus === 'success'}
+              className="w-full btn btn-secondary text-xs whitespace-nowrap flex items-center justify-center gap-1.5"
+            >
+              {injecting ? (
+                <><svg className="animate-spin h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>{t('plot.injecting')}</>
+              ) : (
+                <>
+                  {injectStatus === 'success' && (
+                    <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12" /></svg>
+                  )}
+                  {injectButtonLabel()}
+                </>
+              )}
+            </button>
           </div>
         )}
+
+        {/* Event Result */}
+        {result?.data && result.type === 'event' && (
+          <div className="space-y-3">
+            <div className="p-4 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] space-y-2">
+              <h3 className="text-base font-semibold text-[var(--text-primary)]">{result.data.title}</h3>
+              <p className="text-sm text-[var(--text-secondary)] font-light leading-relaxed">{result.data.description}</p>
+              {result.data.choices?.length > 0 && (
+                <div>
+                  <span className="text-[var(--text-tertiary)] uppercase tracking-wider text-[10px] font-bold block mb-2">{t('plot.choices')}</span>
+                  {result.data.choices.map((c, i) => <div key={i} className="text-sm text-[var(--text-secondary)] py-0.5"><span className="text-[var(--text-tertiary)] font-mono text-xs mr-2">{i + 1}.</span>{c}</div>)}
+                </div>
+              )}
+            </div>
+            <button
+              onClick={handleInject}
+              disabled={injecting || injectStatus === 'success'}
+              className="w-full btn btn-secondary text-xs whitespace-nowrap flex items-center justify-center gap-1.5"
+            >
+              {injecting ? (
+                <><svg className="animate-spin h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>{t('plot.injecting')}</>
+              ) : (
+                <>
+                  {injectStatus === 'success' && (
+                    <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12" /></svg>
+                  )}
+                  {injectButtonLabel()}
+                </>
+              )}
+            </button>
+          </div>
+        )}
+
+        {/* Plot Arc Result */}
         {result?.data && result.type === 'plot' && (
-          <div className="p-4 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)]">
-            <p className="text-sm text-[var(--text-secondary)] font-light italic leading-relaxed">{typeof result.data === 'string' ? result.data : result.data.text}</p>
+          <div className="space-y-3">
+            <div className="p-4 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)]">
+              <p className="text-sm text-[var(--text-secondary)] font-light italic leading-relaxed">{typeof result.data === 'string' ? result.data : result.data.text}</p>
+            </div>
+            <button
+              onClick={handleInject}
+              disabled={injecting || injectStatus === 'success'}
+              className="w-full btn btn-secondary text-xs whitespace-nowrap flex items-center justify-center gap-1.5"
+            >
+              {injecting ? (
+                <><svg className="animate-spin h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>{t('plot.injecting')}</>
+              ) : (
+                <>
+                  {injectStatus === 'success' && (
+                    <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12" /></svg>
+                  )}
+                  {injectButtonLabel()}
+                </>
+              )}
+            </button>
           </div>
         )}
       </div>

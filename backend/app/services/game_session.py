@@ -51,6 +51,7 @@ class GameSession:
         self._inventory = inventory_engine
         self._history: list[dict] = []
         self._turn_count = 0
+        self._streaming = False  # prevents concurrent streams for the same campaign
         self._auto_plot_rules = auto_plot_rules or AUTO_PLOT_RULES
         self._auto_plot_state: dict[str, dict[str, int]] = {
             kind: {"last_turn": 0, "last_narrative_time": 0, "trigger_count": 0}
@@ -90,6 +91,24 @@ class GameSession:
         # opening narrative, seed the history so the AI knows the story setup.
         if not self._history and opening_narrative:
             self._history.append({"role": "assistant", "content": opening_narrative})
+
+    def _last_pending_player_event(self):
+        """Latest PLAYER_ACTION with no NARRATOR_RESPONSE after it (matches GET /pending-action)."""
+        raw = self._event_store.get_by_type(self.campaign_id, EventType.PLAYER_ACTION)
+        # EventStore returns a real list; tests may use a MagicMock (truthy but not iterable).
+        if not isinstance(raw, list) or len(raw) == 0:
+            return None
+        player_events = raw
+        last_player = max(player_events, key=lambda e: e.created_at)
+        nr_raw = self._event_store.get_by_type(
+            self.campaign_id, EventType.NARRATOR_RESPONSE,
+        )
+        if not isinstance(nr_raw, list):
+            return None
+        narrator_events = nr_raw
+        if any(r.created_at > last_player.created_at for r in narrator_events):
+            return None
+        return last_player
 
     def _rebuild_history_from_events(self) -> None:
         """Rebuild _history from persisted events so the AI retains context."""
@@ -792,12 +811,13 @@ class GameSession:
             )
 
     async def process_action(self, player_input: str, max_tokens: int = 2000) -> AsyncIterator[str]:
+        self._streaming = True
         self._max_tokens = max_tokens
 
         # Ensure player power is evaluated with full context (runs once per campaign)
         await self._ensure_player_power()
 
-        # Single-call mode for Anthropic: one LLM call does everything
+            # Single-call mode for Anthropic: one LLM call does everything
         if self._is_single_call_provider():
             async for chunk in self._process_action_single_call(player_input, max_tokens):
                 yield chunk
@@ -810,25 +830,37 @@ class GameSession:
         mode, meta = await self._narrator.detect_mode(player_input, story_context=story_ctx)
         mode = self._coerce_mode(mode)
         narrative_time = meta.get("narrative_time_seconds", 60)
-        if mode != NarrativeMode.META:
+        pending_ev = self._last_pending_player_event()
+        resume_same_turn = (
+            pending_ev is not None
+            and (pending_ev.payload.get("text") or "").strip() == (player_input or "").strip()
+        )
+        if resume_same_turn:
+            logger.info(
+                "Resuming interrupted turn — skipping duplicate PLAYER_ACTION (%s)",
+                self.campaign_id,
+            )
+        if not resume_same_turn and mode != NarrativeMode.META:
             self._turn_count += 1
 
-        self._event_store.append(
-            campaign_id=self.campaign_id,
-            event_type=EventType.PLAYER_ACTION,
-            payload={"text": player_input, "mode": mode.value},
-            narrative_time_delta=narrative_time,
-            location="current",
-            entities=["player"],
-        )
+        if not resume_same_turn:
+            self._event_store.append(
+                campaign_id=self.campaign_id,
+                event_type=EventType.PLAYER_ACTION,
+                payload={"text": player_input, "mode": mode.value},
+                narrative_time_delta=narrative_time,
+                location="current",
+                entities=["player"],
+            )
 
         player_entry = None
-        try:
-            log_player_action = getattr(self._journal, "log_player_action", None)
-            if callable(log_player_action):
-                player_entry = log_player_action(self.campaign_id, player_input)
-        except Exception:
-            logger.warning("Player action journal logging failed", exc_info=True)
+        if not resume_same_turn:
+            try:
+                log_player_action = getattr(self._journal, "log_player_action", None)
+                if callable(log_player_action):
+                    player_entry = log_player_action(self.campaign_id, player_input)
+            except Exception:
+                logger.warning("Player action journal logging failed", exc_info=True)
 
         if self._is_journal_entry(player_entry):
             payload = {
@@ -976,6 +1008,7 @@ class GameSession:
                     opponent_name=combat_opponent_name,
                     opponent_power=combat_npc_power,
                     player_power=self._player_power,
+                    language=self.language,
                 )
 
             graph_ctx = await self.get_graph_relationship_summary()
@@ -1025,6 +1058,7 @@ class GameSession:
         async for chunk in self._narrator.stream_narrative(
             player_input, system_prompt, self._history,
             context_window=context_window,
+            language=self.language,
         ):
             full_response += chunk
             if chunk:
@@ -1045,6 +1079,7 @@ class GameSession:
             async for chunk in self._narrator.stream_narrative(
                 continuation_prompt, system_prompt, continuation_history,
                 context_window=context_window,
+                language=self.language,
             ):
                 full_response += chunk
                 if chunk:
@@ -1100,28 +1135,40 @@ class GameSession:
         mode, meta = await self._narrator.detect_mode(player_input, story_context=story_ctx)
         mode = self._coerce_mode(mode)
         narrative_time = meta.get("narrative_time_seconds", 60)
-        if mode != NarrativeMode.META:
+        pending_ev = self._last_pending_player_event()
+        resume_same_turn = (
+            pending_ev is not None
+            and (pending_ev.payload.get("text") or "").strip() == (player_input or "").strip()
+        )
+        if resume_same_turn:
+            logger.info(
+                "Resuming interrupted turn (single-call) — skipping duplicate PLAYER_ACTION (%s)",
+                self.campaign_id,
+            )
+        if not resume_same_turn and mode != NarrativeMode.META:
             self._turn_count += 1
 
         # Persist player action (same as streaming path)
-        self._event_store.append(
-            campaign_id=self.campaign_id,
-            event_type=EventType.PLAYER_ACTION,
-            payload={"text": player_input, "mode": mode.value},
-            narrative_time_delta=narrative_time,
-            location="current",
-            entities=["player"],
-        )
+        if not resume_same_turn:
+            self._event_store.append(
+                campaign_id=self.campaign_id,
+                event_type=EventType.PLAYER_ACTION,
+                payload={"text": player_input, "mode": mode.value},
+                narrative_time_delta=narrative_time,
+                location="current",
+                entities=["player"],
+            )
 
         # Journal for player action
-        try:
-            log_player_action = getattr(self._journal, "log_player_action", None)
-            if callable(log_player_action):
-                player_entry = log_player_action(self.campaign_id, player_input)
-                if self._is_journal_entry(player_entry):
-                    yield f"[JOURNAL]{json.dumps({'category': player_entry.category.value, 'summary': player_entry.summary, 'created_at': player_entry.created_at})}"
-        except Exception:
-            pass
+        if not resume_same_turn:
+            try:
+                log_player_action = getattr(self._journal, "log_player_action", None)
+                if callable(log_player_action):
+                    player_entry = log_player_action(self.campaign_id, player_input)
+                    if self._is_journal_entry(player_entry):
+                        yield f"[JOURNAL]{json.dumps({'category': player_entry.category.value, 'summary': player_entry.summary, 'created_at': player_entry.created_at})}"
+            except Exception:
+                pass
 
         yield f"[MODE]{mode.value}"
 
@@ -1155,6 +1202,7 @@ class GameSession:
                     action=player_input,
                     npc_name=combat_opponent_name or "opponent",
                     npc_power=combat_npc_power,
+                    language=self.language,
                 )
                 outcome = self._combat.roll_outcome(evaluation.final_quality, combat_npc_power)
                 combat_outcome = outcome.value if hasattr(outcome, "value") else str(outcome)
@@ -1177,10 +1225,29 @@ class GameSession:
                 if combat_opponent_name:
                     self._known_opponent_powers[combat_opponent_name.lower()] = combat_npc_power
 
-                yield (
-                    f"[Combat: {combat_opponent_name} (power {combat_npc_power}) "
-                    f"vs Player (power {self._player_power}) → {combat_outcome}] "
-                )
+                lang_combat_hints = {
+                    "pt-br": {
+                        "CRIT_SUCCESS": f"[Combate: {combat_opponent_name} (poder {combat_npc_power}) vs Jogador (poder {self._player_power}) → SUCESSO CRÍTICO]",
+                        "SUCCESS":      f"[Combate: {combat_opponent_name} (poder {combat_npc_power}) vs Jogador (poder {self._player_power}) → SUCESSO]",
+                        "FAIL":         f"[Combate: {combat_opponent_name} (poder {combat_npc_power}) vs Jogador (poder {self._player_power}) → FALHA]",
+                        "CRIT_FAIL":    f"[Combate: {combat_opponent_name} (poder {combat_npc_power}) vs Jogador (poder {self._player_power}) → FALHA CRÍTICA]",
+                    },
+                    "pt": {
+                        "CRIT_SUCCESS": f"[Combate: {combat_opponent_name} (poder {combat_npc_power}) vs Jogador (poder {self._player_power}) → SUCESSO CRÍTICO]",
+                        "SUCCESS":      f"[Combate: {combat_opponent_name} (poder {combat_npc_power}) vs Jogador (poder {self._player_power}) → SUCESSO]",
+                        "FAIL":         f"[Combate: {combat_opponent_name} (poder {combat_npc_power}) vs Jogador (poder {self._player_power}) → FALHA]",
+                        "CRIT_FAIL":    f"[Combate: {combat_opponent_name} (poder {combat_npc_power}) vs Jogador (poder {self._player_power}) → FALHA CRÍTICA]",
+                    },
+                }
+                default_combat_hints = {
+                    "CRIT_SUCCESS": f"[Combat: {combat_opponent_name} (power {combat_npc_power}) vs Player (power {self._player_power}) → CRIT_SUCCESS]",
+                    "SUCCESS":      f"[Combat: {combat_opponent_name} (power {combat_npc_power}) vs Player (power {self._player_power}) → SUCCESS]",
+                    "FAIL":         f"[Combat: {combat_opponent_name} (power {combat_npc_power}) vs Player (power {self._player_power}) → FAIL]",
+                    "CRIT_FAIL":    f"[Combat: {combat_opponent_name} (power {combat_npc_power}) vs Player (power {self._player_power}) → CRIT_FAIL]",
+                }
+                sc_lang_map = lang_combat_hints.get(self.language, default_combat_hints)
+                sc_combat_hint = sc_lang_map.get(combat_outcome, default_combat_hints.get(combat_outcome, f"[{combat_outcome}]"))
+                yield sc_combat_hint
             except Exception:
                 logger.warning("Combat engine failed in single-call path", exc_info=True)
 
@@ -1224,6 +1291,7 @@ class GameSession:
                 opponent_name=combat_opponent_name,
                 opponent_power=combat_npc_power,
                 player_power=self._player_power,
+                language=self.language,
             )
 
         graph_ctx = await self.get_graph_relationship_summary()
@@ -1289,6 +1357,7 @@ class GameSession:
             canonical_names=canonical_names,
             max_tokens=max_tokens,
             context_window=context_window,
+            language=self.language,
         )
 
         # Get narrative text and emit it all at once
@@ -1312,6 +1381,7 @@ class GameSession:
             async for chunk in self._narrator.stream_narrative(
                 continuation_prompt, system_prompt, continuation_history,
                 context_window=context_window,
+                language=self.language,
             ):
                 full_response += chunk
                 yield chunk
@@ -1381,7 +1451,7 @@ class GameSession:
                         name = npc_data.get("name", "").lstrip("@").strip()
                         if not name:
                             continue
-                        mind = await self._npc_minds._ensure_mind_async(self.campaign_id, name)
+                        mind = await self._npc_minds._ensure_mind_async(self.campaign_id, name, language=self.language)
                         for key, value in npc_data.get("thoughts", {}).items():
                             if value:
                                 mind.set_thought(key, str(value))
@@ -1783,6 +1853,7 @@ class GameSession:
                 action=player_input,
                 npc_name=opponent_name or "opponent",
                 npc_power=npc_power,
+                language=self.language,
             )
             outcome = self._combat.roll_outcome(evaluation.final_quality, npc_power)
             outcome_value = outcome.value if hasattr(outcome, "value") else str(outcome)
@@ -1804,12 +1875,31 @@ class GameSession:
             if opponent_name:
                 self._known_opponent_powers[opponent_name.lower()] = npc_power
 
-            # Prepend outcome hint for narrator
-            outcome_hint = (
-                f"[Combat: {opponent_name} (power {npc_power}) vs Player (power {self._player_power}) "
-                f"→ {outcome_value}] "
-            )
-            yield outcome_hint
+            # Prepend outcome hint for narrator (localized)
+            combat_hint_map = {
+                "pt-br": {
+                    "CRIT_SUCCESS": f"[Combate: {opponent_name} (poder {npc_power}) vs Jogador (poder {self._player_power}) → SUCESSO CRÍTICO]",
+                    "SUCCESS":      f"[Combate: {opponent_name} (poder {npc_power}) vs Jogador (poder {self._player_power}) → SUCESSO]",
+                    "FAIL":         f"[Combate: {opponent_name} (poder {npc_power}) vs Jogador (poder {self._player_power}) → FALHA]",
+                    "CRIT_FAIL":    f"[Combate: {opponent_name} (poder {npc_power}) vs Jogador (poder {self._player_power}) → FALHA CRÍTICA]",
+                },
+                "pt": {
+                    "CRIT_SUCCESS": f"[Combate: {opponent_name} (poder {npc_power}) vs Jogador (poder {self._player_power}) → SUCESSO CRÍTICO]",
+                    "SUCCESS":      f"[Combate: {opponent_name} (poder {npc_power}) vs Jogador (poder {self._player_power}) → SUCESSO]",
+                    "FAIL":         f"[Combate: {opponent_name} (poder {npc_power}) vs Jogador (poder {self._player_power}) → FALHA]",
+                    "CRIT_FAIL":    f"[Combate: {opponent_name} (poder {npc_power}) vs Jogador (poder {self._player_power}) → FALHA CRÍTICA]",
+                },
+            }
+            default_hints = {
+                "CRIT_SUCCESS": f"[Combat: {opponent_name} (power {npc_power}) vs Player (power {self._player_power}) → CRIT_SUCCESS]",
+                "SUCCESS":      f"[Combat: {opponent_name} (power {npc_power}) vs Player (power {self._player_power}) → SUCCESS]",
+                "FAIL":         f"[Combat: {opponent_name} (power {npc_power}) vs Player (power {self._player_power}) → FAIL]",
+                "CRIT_FAIL":    f"[Combat: {opponent_name} (power {npc_power}) vs Player (power {self._player_power}) → CRIT_FAIL]",
+            }
+            lang_map = combat_hint_map.get(self.language, default_hints)
+            combat_hint = lang_map.get(outcome_value, default_hints.get(outcome_value, f"[{outcome_value}]"))
+
+            yield combat_hint
 
             # Inject combat outcome into the player input itself so the LLM cannot ignore it.
             # The system prompt hint alone is insufficient — DeepSeek often overrides FAIL outcomes.
@@ -1979,6 +2069,7 @@ class GameSession:
         opponent_name: str = "",
         opponent_power: int = 3,
         player_power: int = 3,
+        language: str = "en",
     ) -> str:
         """Build narrator instructions based on combat outcome and power levels.
 

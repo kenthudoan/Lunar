@@ -3,11 +3,13 @@ import { createPortal } from 'react-dom'
 import { flushSync } from 'react-dom'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useGameStore } from '../store'
-import { streamAction, fetchJournal, fetchHistory, fetchInventory as fetchInventoryApi, rewindLastAction } from '../api'
+import { streamAction, fetchJournal, fetchHistory, fetchCampaignScenario, fetchInventory as fetchInventoryApi, rewindLastAction, getPendingAction } from '../api'
+import { mergeCampaignPatch } from '../utils/campaignStorage'
 import { useI18n } from '../i18n'
 
 import NarrativeBlock from '../components/canvas/NarrativeBlock'
 import { buildChaptersFromMessages, sliceMessagesForChapter } from '../utils/chapters'
+import { MENTION_SPLIT_REGEX } from '../utils/mentionRegex'
 
 // ---- User action bubble ----
 function ActionBubble({ content, onClick }) {
@@ -52,7 +54,7 @@ function ActionBubble({ content, onClick }) {
 // ---- @mention text ----
 function MentionText({ children }) {
   if (typeof children !== 'string') return children
-  const parts = children.split(/(@[A-Z\u00C0-\u024F][A-Za-z\u00C0-\u024F]*(?:\s+[A-Z\u00C0-\u024F][A-Za-z\u00C0-\u024F]*)*)/g)
+  const parts = children.split(MENTION_SPLIT_REGEX)
   if (parts.length === 1) return children
   return parts.map((part, i) =>
     part.startsWith('@')
@@ -65,9 +67,9 @@ function MentionText({ children }) {
 function NarratorSkeleton() {
   return (
     <div className="max-w-[min(640px,80%)]">
-      <div className="flex items-center gap-2 mb-3 opacity-40">
-        <span className="w-1 h-1 rounded-full bg-[var(--text-tertiary)]" />
-        <span className="text-[10px] font-bold uppercase tracking-widest font-mono text-[var(--text-tertiary)]">
+      <div className="flex items-center gap-2 mb-3 opacity-70">
+        <span className="w-1 h-1 rounded-full bg-[var(--warning)]" />
+        <span className="text-[10px] font-bold uppercase tracking-widest font-mono text-[var(--warning)]">
           Narrator
         </span>
       </div>
@@ -109,52 +111,87 @@ function ToolButton({ icon: Icon, label, onClick, active = false, color = 'text-
   )
 }
 
-// ---- Chapter history indicator ----
-function ChapterBar({ chapters, activeChapterId, viewingChapterId, onSelect }) {
+// ---- Chapter history: compact select + prev/next (scales to many chapters) ----
+function ChapterBar({ chapters, activeChapterId, viewingChapterId, selectedChapterId, onSelect, isRecovering, playerTurnCount }) {
   const { t } = useI18n()
 
   if (chapters.length <= 1) return null
 
+  const foundIdx = chapters.findIndex((c) => c.id === selectedChapterId)
+  const safeIdx = foundIdx >= 0 ? foundIdx : chapters.length - 1
+  const atLive = !viewingChapterId || viewingChapterId === activeChapterId
+
+  const chapterOptionLabel = (ch, i) =>
+    (ch.id === 'ch-opening' ? t('play.chapter.opening') : String(i))
+
+  const goPrev = () => {
+    if (safeIdx > 0) onSelect(chapters[safeIdx - 1].id)
+  }
+  const goNext = () => {
+    // BUG FIX: never advance to next chapter while a recovery is in-flight.
+    // The entire "go to next" navigation is blocked during recovery to prevent
+    // the UI from jumping ahead before the recovering chapter is complete.
+    if (isRecovering) return
+    if (safeIdx < chapters.length - 1) onSelect(chapters[safeIdx + 1].id)
+  }
+
+  // Bar count = player turns only (exclude synthetic "opening" row) — avoids "Chương · 3"
+  // when dropdown only shows Mở Đầu + lượt 1 + lượt 2.
+  const barCount = playerTurnCount ?? Math.max(0, chapters.length - 1)
+
   return (
     <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)]/50">
-      <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-tertiary)]">
-        {t('panel.journal')} · {chapters.length}
+      <span className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-tertiary)] shrink-0 truncate max-w-[5.5rem] sm:max-w-none">
+        {t('play.chapter.barLabel', { count: barCount })}
       </span>
-      <div className="flex items-center gap-1.5 overflow-x-auto scrollbar">
-        {chapters.map((ch, i) => {
-          const isActive = ch.id === activeChapterId
-          const isViewing = ch.id === viewingChapterId && !isActive
-          const isOpening = ch.id === 'ch-opening'
-          return (
-            <button
-              key={ch.id}
-              onClick={() => onSelect(ch.id)}
-              className={`
-                flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-medium
-                transition-all duration-150 whitespace-nowrap border flex-shrink-0
-                ${isActive
-                  ? 'bg-[var(--accent-muted)] border-[var(--border-strong)] text-[var(--text-primary)]'
-                  : isViewing
-                  ? 'bg-[var(--warning-muted)] border-[rgba(251,191,36,0.2)] text-[var(--warning)]'
-                  : 'bg-transparent border-[var(--border-subtle)] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] hover:bg-[var(--accent-muted)]'
-                }
-              `}
-            >
-              <span className={`w-1.5 h-1.5 rounded-full ${isActive ? 'bg-[var(--success)]' : isViewing ? 'bg-[var(--warning)]' : 'bg-[var(--text-tertiary)]'}`} />
-              {isOpening ? t('play.chapter.opening') : i}
-            </button>
-          )
-        })}
-      </div>
-      {viewingChapterId && viewingChapterId !== activeChapterId && (
+
+      <div className="flex items-center gap-1 min-w-0 flex-1 sm:flex-initial sm:max-w-md">
         <button
-          onClick={() => onSelect(activeChapterId)}
-          className="ml-auto flex items-center gap-1 px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-widest text-[var(--warning)] bg-[var(--warning-muted)] border border-[rgba(251,191,36,0.2)] hover:bg-[rgba(251,191,36,0.15)] transition-all whitespace-nowrap"
+          type="button"
+          onClick={goPrev}
+          disabled={safeIdx <= 0}
+          className="flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--accent-muted)] disabled:opacity-30 disabled:pointer-events-none transition-all"
+          aria-label={t('play.chapter.prev')}
         >
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
-          {t('generic.play')} {t('play.chapter.live')}
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="15 18 9 12 15 6" /></svg>
         </button>
-      )}
+
+        <div className="relative min-w-0 flex-1">
+          <select
+            value={chapters[safeIdx]?.id ?? chapters[0].id}
+            onChange={(e) => onSelect(e.target.value)}
+            aria-label={t('play.chapter.jump')}
+            className="w-full appearance-none rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-primary)] text-[11px] font-medium pl-3 pr-9 py-2 cursor-pointer hover:border-[var(--border-default)] focus:outline-none focus:ring-1 focus:ring-[var(--border-strong)]"
+          >
+            {chapters.map((ch, i) => {
+              const isLive = ch.id === activeChapterId
+              const isSelected = ch.id === chapters[safeIdx]?.id
+              const viewingOld = viewingChapterId && viewingChapterId !== activeChapterId
+              let suffix = ''
+              if (isLive && atLive && isSelected) suffix = ` · ${t('play.chapter.live')}`
+              else if (isLive && viewingOld) suffix = ` (${t('play.chapter.current')})`
+              return (
+                <option key={ch.id} value={ch.id}>
+                  {chapterOptionLabel(ch, i)}{suffix}
+                </option>
+              )
+            })}
+          </select>
+          <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9" /></svg>
+          </span>
+        </div>
+
+        <button
+          type="button"
+          onClick={goNext}
+          disabled={safeIdx >= chapters.length - 1 || isRecovering}
+          className="flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--accent-muted)] disabled:opacity-30 disabled:pointer-events-none transition-all"
+          aria-label={t('play.chapter.next')}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="9 18 15 12 9 6" /></svg>
+        </button>
+      </div>
     </div>
   )
 }
@@ -190,29 +227,72 @@ export default function Play() {
   // Read persisted state synchronously ONCE at mount (function initializer).
   // This avoids calling setState during render.
   const initialState = useMemo(() => readCampaignFromStorage(campaignId), [campaignId])
+
+  // Compute the "last chapter id" from initialState so the FIRST render already shows
+  // the correct chapter — not blank "ch-opening".  This avoids the flash where
+  // activeChapterId is null before the useEffect runs.
+  const initialChapterId = useMemo(() => {
+    if (initialState.chapters?.length) {
+      return initialState.chapters[initialState.chapters.length - 1].id
+    }
+    if (initialState.messages?.length) {
+      return buildChaptersFromMessages(initialState.messages)[
+        buildChaptersFromMessages(initialState.messages).length - 1
+      ]?.id ?? null
+    }
+    return null
+  }, []) // intentionally empty deps — compute once from initialState
+
   const [messages, setMessages] = useState(initialState.messages || [])
   const [chapters, setChapters] = useState(initialState.chapters || [])
   const [journal, setJournalState] = useState(initialState.journal || [])
   const [inventory, setInventoryState] = useState(initialState.inventory || [])
   const [activeScenario, setActiveScenario] = useState(initialState.scenario || null)
-  const [activeChapterId, setActiveChapterId] = useState(null)
+  const [activeChapterId, setActiveChapterId] = useState(initialChapterId)
   const [viewingChapterId, setViewingChapterId] = useState(null) // null = viewing active / live
   const [loadingError, setLoadingError] = useState(null)
   const hydratedRef = useRef(false)
   const persistRef = useRef(null)
 
   // ---- Persist to localStorage whenever state changes ----
+  // Use refs instead of closure captures — avoid stale snapshots when callbacks
+  // fire asynchronously (e.g., setTimeout, promise chains).
+  const _messagesForPersist = useRef(messages)
+  const _scenarioForPersist = useRef(activeScenario)
+  const _journalForPersist = useRef(journal)
+  const _inventoryForPersist = useRef(inventory)
+  useEffect(() => { _messagesForPersist.current = messages }, [messages])
+  useEffect(() => { _scenarioForPersist.current = activeScenario }, [activeScenario])
+  useEffect(() => { _journalForPersist.current = journal }, [journal])
+  useEffect(() => { _inventoryForPersist.current = inventory }, [inventory])
+
+  // Guard: only persist to localStorage AFTER fetchHistory has run.
+  // persistRef is initialized as null, and this ref tracks whether it's safe to persist.
+  // Before fetchHistory completes, any persist would write stale/empty data and OVERWRITE
+  // the correct data from the previous session (e.g. Chapter 1 complete).
+  const persistedRef = useRef(false)
+
   persistRef.current = () => {
     if (!campaignId) return
+    // CRITICAL: don't persist until fetchHistory has loaded the real server state.
+    // Calling persist before fetchHistory returns (on first render) would write
+    // _messagesForPersist.current = [] (the empty initial state) to localStorage,
+    // wiping out the persisted Chapter 1 data from the previous session.
+    if (!persistedRef.current) return
     try {
+      const msgs = _messagesForPersist.current
+      const scn = _scenarioForPersist.current
+      const jrn = _journalForPersist.current
+      const inv = _inventoryForPersist.current
       const all = JSON.parse(localStorage.getItem('lunar_campaigns') || '{}')
+      const prev = all[campaignId] || {}
       all[campaignId] = {
-        ...(all[campaignId] || {}),
-        scenario: activeScenario,
-        messages,
-        chapters,
-        journal,
-        inventory,
+        ...prev,
+        scenario: scn != null ? scn : (prev.scenario ?? null),
+        messages: msgs,
+        chapters: buildChaptersFromMessages(msgs),
+        journal: jrn,
+        inventory: inv,
       }
       localStorage.setItem('lunar_campaigns', JSON.stringify(all))
     } catch {}
@@ -249,8 +329,9 @@ export default function Play() {
     if (persistRef.current) persistRef.current()
   }
 
-  // displayChapters always from local state
-  const displayChapters = chapters
+  // Always derive from messages. Persisted `chapters` used to use ids like ch-5-1739… which
+  // do not match buildChaptersFromMessages (ch-0, ch-2, …) → after reload slice missed → blank canvas.
+  const displayChapters = useMemo(() => buildChaptersFromMessages(messages), [messages])
 
   const readingChapterId = viewingChapterId ?? activeChapterId
     ?? displayChapters[displayChapters.length - 1]?.id ?? 'ch-opening'
@@ -259,6 +340,12 @@ export default function Play() {
     if (!readingChapterId) return []
     return sliceMessagesForChapter(messages, displayChapters, readingChapterId)
   }, [messages, displayChapters, readingChapterId])
+
+  /** Last message is user → narrator has not finished this turn; block another send. */
+  const awaitingNarrator = useMemo(
+    () => messages.length > 0 && messages[messages.length - 1].role === 'user',
+    [messages],
+  )
 
   const isViewingOldChapter = viewingChapterId !== null && viewingChapterId !== activeChapterId
 
@@ -280,6 +367,34 @@ export default function Play() {
 
   // Mobile bottom-drawer open state (rendered via portal — not inside header backdrop-blur)
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false)
+
+  // Stable ref: always holds the LATEST messages — avoids stale closure in callbacks.
+  // handleAction is called from a promise chain (after fetchHistory), where the `messages`
+  // captured in the useCallback closure would be [] (pre-fetch) instead of the real history.
+  const messagesRef = useRef(messages)
+  useEffect(() => { messagesRef.current = messages }, [messages])
+
+  // Stable ref for the activeChapterId — used in stream callbacks where the closure
+  // could be stale (captured before fetchHistory updated state).
+  const activeChapterIdRef = useRef(activeChapterId)
+  useEffect(() => { activeChapterIdRef.current = activeChapterId }, [activeChapterId])
+
+  // Stable ref for activeScenario — used in streamAction config where closure could be stale
+  const activeScenarioRef = useRef(activeScenario)
+  useEffect(() => { activeScenarioRef.current = activeScenario }, [activeScenario])
+
+  // ---- Recovery state: pending action from a crashed/interrupted session ----
+  const [resumingPending, setResumingPending] = useState(null) // { action, actionId } or null
+  /** True only while re-streaming after user taps "Tiếp tục" on the recovery banner. */
+  const [recoveryMode, setRecoveryMode] = useState(false)
+  const recoveringFromBannerRef = useRef(false)
+  /** Prevents CONTINUE from racing with history fetch. */
+  const historyLoadedRef = useRef(false)
+  /** Separate ref for the auto-dismiss timer so we don't mutate React state. */
+  const bannerTimerRef = useRef(null)
+  /** The chapter ID that was pending when recovery was triggered — used to guard
+   *  against advancing while recovery is still in-flight. */
+  const recoveringChapterIdRef = useRef(null)
 
   useEffect(() => {
     if (!mobileToolsOpen) return
@@ -308,27 +423,125 @@ export default function Play() {
       return
     }
     hydratedRef.current = false
+    historyLoadedRef.current = false
+    // Reset persist guard on each campaign load — will be re-enabled after fetchHistory succeeds.
+    persistedRef.current = false
 
-    // Fetch fresh data from backend (server is source of truth)
-    fetchHistory(campaignId)
-      .then(({ messages: history }) => {
+    // Retry helper: attempt a fetch up to `retries` times with increasing delay.
+    const withRetry = async (fn, retries = 2) => {
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+          const result = await fn()
+          return result
+        } catch (err) {
+          if (attempt === retries) throw err
+          await new Promise((r) => setTimeout(r, 300 * (attempt + 1)))
+        }
+      }
+    }
+
+    // Step 1: ALWAYS fetch history first (source of truth from server).
+    // Retries on transient errors (network blips, slow startup).
+    withRetry(() => fetchHistory(campaignId))
+      .then((res) => {
+        if (!res) {
+          // Server returned 200 but empty body — treat as no history
+          hydratedRef.current = true
+          historyLoadedRef.current = true
+          return null
+        }
+        const { messages: history } = res
         if (history && history.length > 0) {
-          const built = buildChaptersFromMessages(history)
+          // BUG FIX: set activeChapterId to the LAST COMPLETE chapter.
+          // Previously: always set to the last chapter in history, even if its
+          // narrative is missing (pending recovery). This caused the UI to jump
+          // ahead to a "phantom" chapter 3 while chapter 2 was still incomplete.
+          // Now: only mark a chapter complete when it has a matching NARRATOR_RESPONSE.
+          const completeChapterId = (() => {
+            const built = buildChaptersFromMessages(history)
+            // Walk backwards: first chapter whose response is complete
+            // (has an assistant message immediately following its user message)
+            for (let i = built.length - 1; i >= 1; i--) {
+              const ch = built[i]
+              const next = built[i + 1]
+              const start = ch.fromIndex
+              const end = next ? next.fromIndex : history.length
+              const slice = history.slice(start, end)
+              const hasResponse = slice.some((m) => m.role === 'assistant' && m.content?.length > 0)
+              if (hasResponse) return ch.id
+            }
+            // No complete chapter found (all chapters have pending responses)
+            // Fall back to the chapter BEFORE the last one, or opening
+            if (built.length >= 2) return built[built.length - 2].id
+            return built[0]?.id ?? 'ch-opening'
+          })()
+          // If the latest event is a user action with no assistant reply yet, the "live"
+          // chapter must be THAT turn — not the last fully completed chapter. Otherwise
+          // after reload "1 · Live" shows while chapter 1 is still pending and a phantom
+          // chapter 2 exists in the list.
+          let activeId = completeChapterId
+          if (history[history.length - 1]?.role === 'user') {
+            activeId = `ch-${history.length - 1}`
+          }
           setMessages(history)
-          setChapters(built)
-          setActiveChapterId(built[built.length - 1].id)
+          setChapters(buildChaptersFromMessages(history))
+          setActiveChapterId(activeId)
+          // Drop any in-progress "browse old chapter" from before history arrived — avoids
+          // double yellow banners (recovery + viewing old) and VIEWING badge vs live mismatch.
+          setViewingChapterId(null)
         } else {
-          // No server history — start fresh (ch-opening only)
           const start = buildChaptersFromMessages([])
           setChapters(start)
           setActiveChapterId(start[start.length - 1].id)
+          setViewingChapterId(null)
         }
         hydratedRef.current = true
-        // Persist to localStorage
+        // Enable persist AFTER we have the real server state — prevents overwriting
+        // the previous session's data with empty initial state on first render.
+        persistedRef.current = true
         if (persistRef.current) persistRef.current()
+        historyLoadedRef.current = true
+        return history
       })
-      .catch(() => setLoadingError('fetch_failed'))
+      .then((history) => {
+        // Step 2: AFTER history is loaded, check pending status from backend.
+        // Uses `history` from step 1's closure (avoids reading stale localStorage).
+        return withRetry(() => getPendingAction(campaignId)).then((pendingRes) => ({ history, pendingRes }))
+      })
+      .then(({ history, pendingRes }) => {
+        if (!historyLoadedRef.current) return // component may have unmounted
+        const { pending, action, action_id, created_at, user_message_index: pendingUserIdx } = pendingRes
+        // FIX: read hasCompleteResponse from the SERVER history that we just loaded,
+        // not from localStorage (initialState). If persistRef overwrote localStorage
+        // with [] on a previous render, localStorage would be empty and this check
+        // would wrongly trigger recovery even when Chapter 1 is complete on the server.
+        const serverMessages = history
+        const hasCompleteResponse = (
+          serverMessages &&
+          serverMessages.length > 0 &&
+          serverMessages[serverMessages.length - 1].role === 'assistant'
+        )
+        if (pending && action && !hasCompleteResponse) {
+          setViewingChapterId(null)
+          setResumingPending({ action, actionId: action_id, createdAt: created_at })
+          // Pin "live" chapter to the server's pending turn (avoids phantom ch-2 when
+          // history ordering or duplicate rows would misalign with completeChapterId).
+          if (typeof pendingUserIdx === 'number' && pendingUserIdx >= 0) {
+            setActiveChapterId(`ch-${pendingUserIdx}`)
+          }
+        } else {
+          setResumingPending(null)
+          mergeCampaignPatch(campaignId, { pendingActionId: null })
+        }
+      })
+      .catch(() => {
+        // Only set error if history was never loaded successfully
+        if (!hydratedRef.current) {
+          setLoadingError('fetch_failed')
+        }
+      })
 
+    // Inventory + journal load in parallel (they don't affect canvas state)
     fetchInventoryApi(campaignId)
       .then((items) => { setInventoryState(items); setInventoryLocal(items) })
       .catch(() => {})
@@ -337,8 +550,15 @@ export default function Play() {
       .then((entries) => { setJournalState(entries); setJournalLocal(entries) })
       .catch(() => {})
 
-    // Sync activeCampaignId into Zustand store so panel components can read it
     useGameStore.setState({ activeCampaignId: campaignId })
+
+    fetchCampaignScenario(campaignId)
+      .then((scenario) => {
+        if (!scenario) return
+        setActiveScenario((prev) => prev ?? scenario)
+        useGameStore.setState((s) => ({ activeScenario: s.activeScenario ?? scenario }))
+      })
+      .catch(() => {})
   }, [campaignId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Scroll tracking ----
@@ -365,93 +585,204 @@ export default function Play() {
     })
   }, [displayMessages])
 
-  // Add user message → new chapter starts at this index in flat messages
-  const handleAction = useCallback((action) => {
-    const userMsg = { role: 'user', content: action }
-    const fromIndex = messages.length
-    const newMessages = [...messages, userMsg]
-    setMessages(newMessages)
+  // Add user message → new chapter starts at this index in flat messages.
+  // `isReplay` is true when re-streaming after clicking "Tiếp tục" on the recovery banner.
+  //
+  // VIGAN (stale closure fix):
+  // Use messagesRef.current instead of the `messages` closure variable.
+  // When handleAction is called from the promise chain AFTER fetchHistory,
+  // the closure `messages` would be [] (the pre-fetch value), not the real history.
+  // messagesRef.current is kept in sync via useEffect.
+  //
+  // After fetchHistory the canvas may already show a partial assistant response
+  // (the server saved it before the previous stream crashed).  In that case we
+  // do NOT call streamAction again — doing so would send the same action to the
+  // server a second time, appending a DUPLICATE PLAYER_ACTION + response and
+  // creating a phantom chapter.  Instead we just wait for the existing stream to
+  // finish: setStreaming(true) shows the indicator, onChunk / onDone complete the
+  // partial text in-place.
+  //
+  // How we detect "partial already saved": the last message is an assistant message
+  // whose content is a PREFIX of what the server will stream back (partial vs complete).
+  // Use a module-level symbol to mark actions that have already been sent to the
+  // server in the current session (to avoid double-send on the replay path).
+  // Set before each streamAction call; cleared in onDone / onError.
+  const _sentActions = useRef(new Set())
+  useEffect(() => { _sentActions.current.clear() }, [campaignId])
 
-    const chapterId = `ch-${fromIndex}-${Date.now()}`
-    const prior = chapters.length > 0 ? chapters : buildChaptersFromMessages(messages)
-    const next = [...prior, { id: chapterId, fromIndex }]
-    setChapters(next)
-    setActiveChapterId(chapterId)
-    setViewingChapterId(null) // return to live
-    userScrolledUp.current = false  // new action → always auto-scroll
-    setStreaming(true)
+  // CRITICAL: always read from the LIVE ref, never the closure `messages`.
+  // When hasPartialSaved is called from the promise chain (after fetchHistory),
+  // the closure `messages` would be [] (pre-fetch value), not the real history.
+  const hasPartialSaved = (action) => {
+    const msgs = messagesRef.current
+    if (!msgs?.length) return false
+    const last = msgs[msgs.length - 1]
+    if (last?.role !== 'assistant') return false
+    // Partial: stored text is a prefix of the complete response.
+    // The pending action text is NOT in the response — it was the user input.
+    // Check: does the action text start with the partial content prefix?
+    return last.content?.length > 0 && action?.startsWith(last.content.slice(0, 10))
+  }
 
-    // Persist after adding new chapter
-    setTimeout(() => { if (persistRef.current) persistRef.current() }, 0)
+  const handleAction = useCallback((action, isReplay = false) => {
+    // Always read from the live ref to avoid stale closure
+    const currentMessages = messagesRef.current
+    const shouldStream = !isReplay || !hasPartialSaved(action)
 
-    // Streaming always targets the active chapter. If user was viewing an old chapter,
-    // they just started a new one — viewingChapterId is already reset to null above.
-    streamAction({
-      campaignId,
-      scenarioTone: activeScenario?.tone_instructions ?? '',
-      language: activeScenario?.language ?? 'en',
-      action,
-      openingNarrative: activeScenario?.opening_narrative ?? '',
-      maxTokens: maxTokens || 2000,
-      provider: llmProvider,
-      model: llmModel,
-      temperature,
-      onChunk: (chunk) => {
-        flushSync(() => {
-          setMessages((prev) => {
-            const msgs = [...prev]
-            const last = msgs[msgs.length - 1]
-            if (last && last.role === 'assistant') {
-              msgs[msgs.length - 1] = { ...last, content: last.content + chunk }
-            } else {
-              msgs.push({ role: 'assistant', content: chunk })
-            }
-            return msgs
-          })
-        })
-        // Persist after each chunk (outside flushSync to avoid blocking render)
-        setTimeout(() => { if (persistRef.current) persistRef.current() }, 0)
-      },
-      onJournal: (entry) => {
-        addJournalEntryLocal(entry)
-      },
-      onMode: (mode) => {
-        const normalized = String(mode || '').trim().split('.').pop()?.trim().toUpperCase()
-        setCombatMode(normalized === 'COMBAT')
-      },
-      onInventory: (item) => {
-        if (item.action === 'add') addInventoryItemLocal(item)
-        else if (item.action === 'use') updateInventoryItemLocal(item.name, 'used')
-        else if (item.action === 'lose') updateInventoryItemLocal(item.name, 'lost')
-      },
-      onPlotAuto: (plot) => {
-        const formatted = formatAutoPlotMessage(plot)
-        flushSync(() => setMessages((prev) => [...prev, { role: 'assistant', content: formatted }]))
-        setTimeout(() => { if (persistRef.current) persistRef.current() }, 0)
-      },
-      onTruncateClean: (cleanText) => {
-        flushSync(() => {
-          setMessages((prev) => {
-            const msgs = [...prev]
-            for (let i = msgs.length - 1; i >= 0; i--) {
-              if (msgs[i].role === 'assistant') {
-                msgs[i] = { ...msgs[i], content: cleanText }
-                break
+    // Never stack a second user turn before the narrator finishes the previous one.
+    // Prevents "chapter 2" appearing while chapter 1 is still incomplete (recovery).
+    if (!isReplay && currentMessages.length > 0) {
+      const last = currentMessages[currentMessages.length - 1]
+      if (last?.role === 'user') {
+        return
+      }
+    }
+
+    if (!isReplay) {
+      const userMsg = { role: 'user', content: action }
+      // Use currentMessages (ref) instead of closure `messages` — the closure
+      // may be stale if handleAction is called from a promise chain (recovery).
+      const newMessages = [...currentMessages, userMsg]
+      const built = buildChaptersFromMessages(newMessages)
+      setMessages(newMessages)
+      setChapters(built)
+      setActiveChapterId(built[built.length - 1]?.id ?? 'ch-opening')
+      setViewingChapterId(null)
+      userScrolledUp.current = false
+    } else {
+      // fetchHistory loaded the complete messages + set activeChapterId.
+      // RecoveringChapterIdRef records which chapter needs completion — used
+      // to prevent the UI from jumping ahead before recovery finishes.
+      recoveringChapterIdRef.current = activeChapterIdRef.current
+      // The SSE onChunk will finish the pending response.
+      setViewingChapterId(null)
+      userScrolledUp.current = false
+      // When replaying: only append if the action is NOT already the last user message.
+      // If it IS the last user message (user action already saved to localStorage before
+      // the previous stream crashed), skip appending — the existing stream will complete
+      // the response in-place and appending would create a DUPLICATE chapter.
+      const lastMsg = currentMessages[currentMessages.length - 1]
+      const alreadyLastUser = lastMsg?.role === 'user' && lastMsg.content === action
+      if (!alreadyLastUser) {
+        const userMsg = { role: 'user', content: action }
+        const newMessages = [...currentMessages, userMsg]
+        const built = buildChaptersFromMessages(newMessages)
+        setMessages(newMessages)
+        setChapters(built)
+        setActiveChapterId(built[built.length - 1]?.id ?? 'ch-opening')
+      }
+    }
+
+    if (shouldStream) {
+      // Guard: if this exact action is already in-flight, drop the duplicate call.
+      // This prevents double-streaming if the user clicks rapidly or if the recovery
+      // button is clicked while the previous stream is still initializing.
+      // Applies to BOTH isReplay (recovery replay) and normal sends.
+      if (_sentActions.current.has(action)) return
+      _sentActions.current.add(action)
+      setStreaming(true)
+
+      // Persist after adding new chapter
+      setTimeout(() => { if (persistRef.current) persistRef.current() }, 0)
+
+      // Streaming always targets the active chapter. If user was viewing an old chapter,
+      // they just started a new one — viewingChapterId is already reset to null above.
+      // Use refs for all closure variables used inside streamAction callbacks.
+      // The callbacks (onChunk, onDone, etc.) can fire asynchronously and capture
+      // stale values from the closure. Refs always hold the latest values.
+      streamAction({
+        campaignId,
+        scenarioTone: activeScenarioRef.current?.tone_instructions ?? '',
+        language: activeScenarioRef.current?.language ?? 'en',
+        action,
+        openingNarrative: activeScenarioRef.current?.opening_narrative ?? '',
+        maxTokens: maxTokens || 2000,
+        provider: llmProvider,
+        model: llmModel,
+        temperature,
+        onChunk: (chunk) => {
+          flushSync(() => {
+            setMessages((prev) => {
+              const msgs = [...prev]
+              const last = msgs[msgs.length - 1]
+              if (last && last.role === 'assistant') {
+                msgs[msgs.length - 1] = { ...last, content: last.content + chunk }
+              } else {
+                msgs.push({ role: 'assistant', content: chunk })
               }
-            }
-            return msgs
+              return msgs
+            })
           })
-        })
-      },
-      onDone: () => {
-        setStreaming(false)
-        // Persist final state
-        setTimeout(() => { if (persistRef.current) persistRef.current() }, 0)
-        setTimeout(() => setCombatMode(false), 3000)
-      },
-      onError: () => setStreaming(false),
-    })
-  }, [campaignId, activeScenario, maxTokens, llmProvider, llmModel, temperature, messages, chapters])
+          // Persist after each chunk (outside flushSync to avoid blocking render)
+          setTimeout(() => { if (persistRef.current) persistRef.current() }, 0)
+        },
+        onJournal: (entry) => {
+          addJournalEntryLocal(entry)
+        },
+        onMode: (mode) => {
+          const normalized = String(mode || '').trim().split('.').pop()?.trim().toUpperCase()
+          setCombatMode(normalized === 'COMBAT')
+        },
+        onInventory: (item) => {
+          if (item.action === 'add') addInventoryItemLocal(item)
+          else if (item.action === 'use') updateInventoryItemLocal(item.name, 'used')
+          else if (item.action === 'lose') updateInventoryItemLocal(item.name, 'lost')
+        },
+        onPlotAuto: (plot) => {
+          const formatted = formatAutoPlotMessage(plot)
+          flushSync(() => setMessages((prev) => [...prev, { role: 'assistant', content: formatted }]))
+          setTimeout(() => { if (persistRef.current) persistRef.current() }, 0)
+        },
+        onTruncateClean: (cleanText) => {
+          flushSync(() => {
+            setMessages((prev) => {
+              const msgs = [...prev]
+              for (let i = msgs.length - 1; i >= 0; i--) {
+                if (msgs[i].role === 'assistant') {
+                  msgs[i] = { ...msgs[i], content: cleanText }
+                  break
+                }
+              }
+              return msgs
+            })
+          })
+        },
+        onDone: () => {
+          setStreaming(false)
+          setTimeout(() => { if (persistRef.current) persistRef.current() }, 0)
+          setTimeout(() => setCombatMode(false), 3000)
+          mergeCampaignPatch(campaignId, { pendingActionId: null })
+          useGameStore.getState().clearPendingActionId()
+          setRecoveryMode(false)
+          recoveringChapterIdRef.current = null
+          _sentActions.current.delete(action)
+          if (recoveringFromBannerRef.current) {
+            recoveringFromBannerRef.current = false
+            setResumingPending(null)
+          }
+        },
+        onError: () => {
+          // Keep banner so user can retry (don't clear resumingPending).
+          setStreaming(false)
+          mergeCampaignPatch(campaignId, { pendingActionId: null })
+          useGameStore.getState().clearPendingActionId()
+          setRecoveryMode(false)
+          _sentActions.current.delete(action)
+        },
+        onPendingActionId: (id) => {
+          useGameStore.getState().setPendingActionId(id)
+        },
+      })
+    } else {
+      // Partial response already saved by a previous interrupted stream.
+      // Do NOT stream again — just enable the streaming indicator so the user
+      // knows the session is still alive.  onChunk / onDone will fire as the
+      // SSE connection (from the PREVIOUS isReplay stream) completes.
+      // Persist to update any stale state.
+      setStreaming(true)
+      setTimeout(() => { if (persistRef.current) persistRef.current() }, 0)
+    }
+  }, [campaignId, activeScenario, maxTokens, llmProvider, llmModel, temperature, messages])
 
   const handleRewind = async () => {
     if (!campaignId || isStreaming || messages.length === 0) return
@@ -556,6 +887,8 @@ export default function Play() {
     )
   }
 
+  // ---- Status banner: interpolated inline in JSX below ----
+
   return (
     <div className={`
       flex flex-col h-screen bg-[var(--bg-base)]
@@ -578,7 +911,7 @@ export default function Play() {
             </h1>
             <div className="flex items-center gap-2 text-[10px] font-mono text-[var(--text-tertiary)]">
               <span>ID: {campaignId?.slice(0, 6) || t('canvas.offline')}</span>
-              {isViewingOldChapter && (
+              {isViewingOldChapter && !resumingPending && (
                 <span className="badge badge-warning text-[8px] px-1.5 py-0.5">
                   {t('play.chapter.viewing', { n: displayChapters.findIndex((c) => c.id === viewingChapterId) + 1 })}
                 </span>
@@ -689,18 +1022,77 @@ export default function Play() {
         </div>
       </header>
 
-      {/* ===== VIEWING OLD CHAPTER BANNER ===== */}
-      {isViewingOldChapter && (
+      {/* ===== RECOVERY BANNER (viewing-old banner is suppressed while this is shown) ===== */}
+      {/* ===== RECOVERY BANNER ===== */}
+      {resumingPending && (
         <div className="flex items-center gap-3 px-4 py-2.5 bg-[rgba(251,191,36,0.08)] border-b border-[rgba(251,191,36,0.2)]">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--warning)] flex-shrink-0">
-            <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+            <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/>
           </svg>
           <p className="text-[11px] text-[var(--warning)] font-medium flex-1">
+            {!historyLoadedRef.current
+              ? 'Đang tải phiên chơi…'
+              : recoveryMode
+                ? 'Đang tiếp tục phiên chơi…'
+                : resumingPending.action
+                  ? 'Phiên chơi bị gián đoạn — hành động trước chưa có phản hồi'
+                  : 'Hành động vừa hoàn tất'}
+          </p>
+          {!recoveryMode && resumingPending.action && (
+            <>
+              <button
+                className="flex-none px-3 py-1.5 rounded-lg bg-[var(--warning)] text-[var(--bg-base)] text-[11px] font-semibold hover:opacity-80 transition-opacity disabled:opacity-50"
+                disabled={!historyLoadedRef.current}
+                title={!historyLoadedRef.current ? 'Đang tải…' : 'Tiếp tục phiên chơi'}
+                onClick={() => {
+                  if (!historyLoadedRef.current) return
+                  recoveringFromBannerRef.current = true
+                  setRecoveryMode(true)
+                  handleAction(resumingPending.action, true)
+                  clearTimeout(bannerTimerRef.current)
+                  bannerTimerRef.current = setTimeout(() => {
+                    setResumingPending(null)
+                    bannerTimerRef.current = null
+                  }, 60000)
+                }}
+              >
+                Tiếp tục
+              </button>
+              <button
+                className="flex-none px-3 py-1.5 rounded-lg border border-[rgba(251,191,36,0.3)] text-[var(--warning)] text-[11px] font-medium hover:bg-[rgba(251,191,36,0.1)] transition-colors"
+                onClick={() => {
+                  clearTimeout(bannerTimerRef.current)
+                  bannerTimerRef.current = null
+                  setResumingPending(null)
+                }}
+              >
+                Bỏ qua
+              </button>
+            </>
+          )}
+          {!recoveryMode && !resumingPending.action && (
+            <button
+              className="flex-none px-3 py-1.5 rounded-lg border border-[rgba(251,191,36,0.3)] text-[var(--warning)] text-[11px] font-medium hover:bg-[rgba(251,191,36,0.1)] transition-colors"
+              onClick={() => setResumingPending(null)}
+            >
+              Đóng
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ===== VIEWING OLD CHAPTER BANNER (hide while recovery is active — one banner only) ===== */}
+      {isViewingOldChapter && !resumingPending && (
+        <div className="flex items-center gap-3 px-4 py-2.5 bg-[var(--info-muted)] border-b border-[rgba(96,165,250,0.18)]">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--info)] flex-shrink-0">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
+          </svg>
+          <p className="text-[11px] text-[var(--info)] opacity-80 flex-1 leading-none">
             {t('play.chapter.viewingOldHint')}
           </p>
           <button
             onClick={() => setViewingChapterId(null)}
-            className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-widest text-[var(--warning)] bg-[rgba(251,191,36,0.1)] border border-[rgba(251,191,36,0.25)] hover:bg-[rgba(251,191,36,0.18)] transition-all whitespace-nowrap"
+            className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-widest text-[var(--info)] bg-[rgba(96,165,250,0.08)] border border-[rgba(96,165,250,0.2)] hover:bg-[rgba(96,165,250,0.14)] hover:border-[rgba(96,165,250,0.3)] transition-all whitespace-nowrap"
           >
             {t('play.chapter.returnToCurrent')}
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="9 18 15 12 9 6" /></svg>
@@ -713,7 +1105,10 @@ export default function Play() {
         chapters={displayChapters}
         activeChapterId={activeChapterId}
         viewingChapterId={viewingChapterId}
+        selectedChapterId={readingChapterId}
         onSelect={handleChapterSelect}
+        isRecovering={!!resumingPending}
+        playerTurnCount={Math.max(0, displayChapters.length - 1)}
       />
 
       {/* ===== MAIN: Narrative area ===== */}
@@ -721,14 +1116,14 @@ export default function Play() {
         {/* ---- Narrative Area ---- */}
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto scrollbar px-4 md:px-8 py-8"
+          className="flex-1 overflow-y-auto scrollbar px-5 sm:px-6 md:px-8 py-8"
         >
           <div className="max-w-[var(--content-max-width)] mx-auto space-y-8">
 
             {/* Opening narrative */}
             {readingChapterId === 'ch-opening' && activeScenario?.opening_narrative && (
-              <div className="card-raised p-6 md:p-8">
-                <div className="flex items-center gap-2 mb-3 text-[10px] font-bold uppercase tracking-widest text-[var(--warning)] opacity-60">
+              <div className="card-raised p-5 sm:p-6 md:p-8">
+                <div className="flex items-center gap-2 mb-3 text-[10px] font-bold uppercase tracking-widest text-[var(--warning)] opacity-70">
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>
                   {t('play.opening.badge', { title: activeScenario.title }) || `Mở Đầu · ${activeScenario.title}`}
                 </div>
@@ -746,10 +1141,10 @@ export default function Play() {
                   onClick={() => {/* TODO: edit action */}}
                 />
               ) : (
-                <div key={i} className="pl-1">
-                  <div className="flex items-center gap-2 mb-3 opacity-40">
-                    <span className={`w-1.5 h-1.5 rounded-full ${combatMode ? 'bg-[var(--error)]' : 'bg-[var(--text-tertiary)]'}`} />
-                    <span className={`text-[10px] font-bold uppercase tracking-widest font-mono ${combatMode ? 'text-[var(--error)]' : 'text-[var(--text-tertiary)]'}`}>
+                <div key={i} className="card-raised p-5 sm:p-6 md:p-8">
+                  <div className="flex items-center gap-2 mb-3 opacity-70">
+                    <span className={`w-1.5 h-1.5 rounded-full ${combatMode ? 'bg-[var(--error)]' : 'bg-[var(--warning)]'}`} />
+                    <span className={`text-[10px] font-bold uppercase tracking-widest font-mono ${combatMode ? 'text-[var(--error)]' : 'text-[var(--warning)]'}`}>
                       {combatMode ? t('canvas.combat') : t('canvas.narrator')}
                     </span>
                   </div>
@@ -775,11 +1170,18 @@ export default function Play() {
       </div>
 
       {/* ===== INPUT AREA ===== */}
-      <div className="flex-none border-t border-[var(--border-subtle)] bg-[var(--bg-surface)]/95 backdrop-blur-xl z-10">
-        <div className="max-w-[var(--content-max-width)] mx-auto">
-          <ActionInputRedesigned onSubmit={handleAction} disabled={isStreaming} />
+      {!isViewingOldChapter && (
+        <div className="flex-none border-t border-[var(--border-subtle)] bg-[var(--bg-surface)]/95 backdrop-blur-xl z-10">
+          <div className="max-w-[var(--content-max-width)] mx-auto px-5 sm:px-6 md:px-8">
+            <ActionInputRedesigned
+              onSubmit={handleAction}
+              disabled={isStreaming}
+              awaitingNarrator={awaitingNarrator}
+              recoveryBlocking={!!resumingPending?.action}
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       {/* ===== Tool panels (Modal overlays — all breakpoints) ===== */}
       {PanelComponents && (
@@ -857,7 +1259,7 @@ export default function Play() {
 }
 
 // ---- Redesigned Action Input ----
-function ActionInputRedesigned({ onSubmit, disabled }) {
+function ActionInputRedesigned({ onSubmit, disabled, awaitingNarrator = false, recoveryBlocking = false }) {
   const { t } = useI18n()
   const [text, setText] = useState('')
   const [type, setType] = useState('DO')
@@ -867,6 +1269,8 @@ function ActionInputRedesigned({ onSubmit, disabled }) {
   const textareaRef = useRef(null)
   const dropdownRef = useRef(null)
   const campaignId = useGameStore((s) => s.activeCampaignId)
+
+  const inputLocked = disabled || awaitingNarrator || recoveryBlocking
 
   const ACTION_TYPES = [
     { id: 'DO', labelKey: 'action.do', hintKey: 'action.doHint' },
@@ -879,7 +1283,7 @@ function ActionInputRedesigned({ onSubmit, disabled }) {
   useEffect(() => {
     const handleGlobalKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        if (!text.trim() && !disabled) {
+        if (!text.trim() && !inputLocked) {
           e.preventDefault()
           onSubmit('[CONTINUE]')
         }
@@ -887,7 +1291,7 @@ function ActionInputRedesigned({ onSubmit, disabled }) {
     }
     window.addEventListener('keydown', handleGlobalKey)
     return () => window.removeEventListener('keydown', handleGlobalKey)
-  }, [text, disabled, onSubmit])
+  }, [text, inputLocked, onSubmit])
 
   const fetchCharacters = async (query) => {
     try {
@@ -932,6 +1336,7 @@ function ActionInputRedesigned({ onSubmit, disabled }) {
 
   const handleSubmit = (e) => {
     e?.preventDefault()
+    if (inputLocked) return
     if (mentionState && mentionResults.length > 0) return
     const trimmed = text.trim()
     if (!trimmed && type !== 'CONTINUE') return
@@ -950,8 +1355,14 @@ function ActionInputRedesigned({ onSubmit, disabled }) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit() }
   }
 
+  const lockedPlaceholder = () => {
+    if (recoveryBlocking) return t('action.placeholder.recoveryFirst')
+    if (awaitingNarrator) return t('action.placeholder.awaitNarrator')
+    return t('action.placeholder.waiting')
+  }
+
   return (
-    <form onSubmit={handleSubmit} className="p-4 space-y-3">
+    <form onSubmit={handleSubmit} className="py-4 space-y-3">
       {/* Action type pills */}
       <div className="flex gap-1.5 flex-wrap">
         {ACTION_TYPES.map((a) => {
@@ -960,7 +1371,8 @@ function ActionInputRedesigned({ onSubmit, disabled }) {
             <button
               key={a.id}
               type="button"
-              onClick={() => { setType(a.id); if (a.id === 'CONTINUE') setText('') }}
+              disabled={inputLocked}
+              onClick={() => { if (inputLocked) return; setType(a.id); if (a.id === 'CONTINUE') setText('') }}
               className={`
                 px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-widest transition-all duration-150 border
                 ${isActive
@@ -986,10 +1398,10 @@ function ActionInputRedesigned({ onSubmit, disabled }) {
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={disabled}
+            disabled={inputLocked}
             className="flex-1 text-left px-4 py-3 rounded-xl bg-[var(--accent-muted)] border border-[var(--border-default)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] transition-all text-sm font-light cursor-pointer disabled:opacity-50"
           >
-            {disabled ? t('action.placeholder.waiting') : t('action.placeholder.continue')}
+            {inputLocked ? lockedPlaceholder() : t('action.placeholder.continue')}
           </button>
         ) : (
           <div className="flex-1 relative">
@@ -998,8 +1410,8 @@ function ActionInputRedesigned({ onSubmit, disabled }) {
               value={text}
               onChange={handleTextChange}
               onKeyDown={handleKeyDown}
-              disabled={disabled}
-              placeholder={disabled ? t('action.placeholder.waiting') : t(`action.placeholder.${type.toLowerCase()}`)}
+              disabled={inputLocked}
+              placeholder={inputLocked ? lockedPlaceholder() : t(`action.placeholder.${type.toLowerCase()}`)}
               rows={2}
               className={`
                 w-full rounded-xl px-4 py-3 text-sm font-light leading-relaxed resize-none
@@ -1037,11 +1449,11 @@ function ActionInputRedesigned({ onSubmit, disabled }) {
         )}
         <button
           type="submit"
-          disabled={disabled || (type !== 'CONTINUE' && !text.trim())}
+          disabled={inputLocked || (type !== 'CONTINUE' && !text.trim())}
           className={`
             flex items-center justify-center w-12 h-12 rounded-xl flex-shrink-0
             border transition-all duration-150
-            ${(disabled || (type !== 'CONTINUE' && !text.trim()))
+            ${(inputLocked || (type !== 'CONTINUE' && !text.trim()))
               ? 'bg-[var(--accent-muted)] border-[var(--border-subtle)] text-[var(--text-disabled)] cursor-not-allowed'
               : 'bg-[rgba(200,200,216,0.15)] border-[rgba(200,200,216,0.32)] text-[var(--text-primary)] hover:bg-[rgba(200,200,216,0.22)] hover:border-[rgba(200,200,216,0.48)] cursor-pointer'
             }

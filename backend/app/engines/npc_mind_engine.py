@@ -100,28 +100,47 @@ class NpcMindEngine:
         return candidates
 
     async def _confirm_same_character(
-        self, name_a: str, name_b: str, context_a: str = "", context_b: str = ""
+        self, name_a: str, name_b: str, context_a: str = "", context_b: str = "", language: str = "en"
     ) -> bool:
         """Ask LLM if two names refer to the same character, with optional context."""
+        _confirm_prompts = {
+            "vi": {
+                "system": (
+                    "Bạn xác định xem hai tên nhân vật có chỉ cùng một nhân vật trong game RPG hay không. "
+                    "Cân nhắc thứ tự tên (ví dụ 'Họ Tên' = 'Tên Họ'), biệt danh, danh hiệu và tên rút gọn. "
+                    "Trả lời CHỈ 'CÓ' hoặc 'KHÔNG'."
+                ),
+                "question": "Hai nhân vật này có phải là cùng một người không?\nTên A: {name_a}\nTên B: {name_b}{context}",
+            },
+            "pt-br": {
+                "system": (
+                    "Você determina se dois nomes de personagens referem-se ao mesmo personagem em um RPG. "
+                    "Considere variações de ordem de nomes (ex: 'Nome Sobrenome' = 'Sobrenome Nome'), "
+                    "apelidos, títulos e nomes parciais. "
+                    "Responda APENAS 'SIM' ou 'NÃO'."
+                ),
+                "question": "Estes são o mesmo personagem?\nNome A: {name_a}\nNome B: {name_b}{context}",
+            },
+        }
+        conf = _confirm_prompts.get(language, {
+            "system": (
+                "You determine if two character names refer to the same character in an RPG. "
+                "Consider name order variations (e.g. 'FirstName LastName' = 'LastName FirstName'), "
+                "nicknames, titles, and partial names. "
+                "Answer ONLY 'YES' or 'NO'."
+            ),
+            "question": "Are these the same character?\nName A: {name_a}\nName B: {name_b}{context}",
+        })
         context_info = ""
         if context_a:
             context_info += f"\nContext for '{name_a}': {context_a}"
         if context_b:
             context_info += f"\nContext for '{name_b}': {context_b}"
-
         messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You determine if two character names refer to the same character in an RPG. "
-                    "Consider name order variations (e.g. 'FirstName LastName' = 'LastName FirstName'), "
-                    "nicknames, titles, and partial names. "
-                    "Answer ONLY 'YES' or 'NO'."
-                ),
-            },
+            {"role": "system", "content": conf["system"]},
             {
                 "role": "user",
-                "content": f"Are these the same character?\nName A: {name_a}\nName B: {name_b}{context_info}",
+                "content": conf["question"].format(name_a=name_a, name_b=name_b, context=context_info),
             },
         ]
         raw = await self._llm.complete(messages=messages, max_tokens=16)
@@ -140,7 +159,7 @@ class NpcMindEngine:
             self._minds[campaign_id][key] = NpcMind(name=npc_name, campaign_id=campaign_id)
         return self._minds[campaign_id][key]
 
-    async def _ensure_mind_async(self, campaign_id: str, npc_name: str) -> NpcMind:
+    async def _ensure_mind_async(self, campaign_id: str, npc_name: str, language: str = "en") -> NpcMind:
         """Like _ensure_mind but with fuzzy matching + LLM confirmation."""
         # Strip @ prefix that narration uses for mentions
         npc_name = npc_name.lstrip("@").strip()
@@ -156,7 +175,7 @@ class NpcMindEngine:
 
         candidates = self._find_fuzzy_candidates(campaign_id, npc_name)
         for candidate in candidates:
-            if await self._confirm_same_character(npc_name, candidate.name):
+            if await self._confirm_same_character(npc_name, candidate.name, language=language):
                 if npc_name.lower() not in [a.lower() for a in candidate.aliases]:
                     candidate.aliases.append(npc_name)
                 if len(npc_name) > len(candidate.name):
@@ -198,6 +217,24 @@ class NpcMindEngine:
                 "Thoughts should reflect their personality and recent events. "
                 "Preserve NPC names exactly as they appear in the narrative."
             ),
+            "vi": (
+                "Bạn phân tích văn bản tường thuật RPG và trích xuất suy nghĩ nội tâm của NPC. "
+                "Với mỗi NPC được đề cập, xác định họ đang nghĩ gì một cách riêng tư. "
+                "Trả về CHỈ JSON hợp lệ (không có markdown): "
+                '{"npcs": [{"name": str, "thoughts": {"feeling": str, "goal": str, '
+                '"opinion_of_player": str, "secret_plan": str}}]}. '
+                "Bao gồm TẤT CẢ NPC xuất hiện tích cực trong tường thuật — nói chuyện, hành động, "
+                "phản ứng, quan sát, hoặc được mô tả trực tiếp. Cũng bao gồm NPC có mặt "
+                "vật lý trong cảnh ngay cả khi họ là người quan sát im lặng — phản ứng nội tâm của họ "
+                "với những gì đang xảy ra là quan trọng. KHÔNG bỏ qua NPC chỉ vì "
+                "người khác nổi bật hơn trong cảnh. Ưu tiên sự đầy đủ hơn sự ngắn gọn. "
+                "KHÔNG bao gồm NPC chỉ được nhắc đến bởi nhân vật khác hoặc "
+                "tham chiếu trong ký ức/flashback — chỉ những người có mặt vật lý "
+                "trong cảnh hiện tại. "
+                "Suy nghĩ nên phản ánh tính cách và sự kiện gần đây của họ. "
+                "Giữ nguyên tên NPC chính xác như chúng xuất hiện trong tường thuật. "
+                "Viết tất cả giá trị suy nghĩ bằng tiếng Việt."
+            ),
             "pt-br": (
                 "Você analisa texto narrativo de RPG e extrai os pensamentos internos dos NPCs. "
                 "Para cada NPC mencionado, determine o que eles estão pensando em privado. "
@@ -219,8 +256,6 @@ class NpcMindEngine:
         }
 
         prompt_text = _NPC_MIND_PROMPTS.get(language, _NPC_MIND_PROMPTS["en"])
-        if language and language != "en" and language not in _NPC_MIND_PROMPTS:
-            prompt_text += f" Write all thought values in the same language as the narrative ({lang_name(language)})."
 
         messages = [
             {
@@ -249,7 +284,7 @@ class NpcMindEngine:
                 candidates = self._find_fuzzy_candidates(campaign_id, name)
                 merged = False
                 for candidate in candidates:
-                    if await self._confirm_same_character(name, candidate.name):
+                    if await self._confirm_same_character(name, candidate.name, language=language):
                         if name.lower() not in [a.lower() for a in candidate.aliases]:
                             candidate.aliases.append(name)
                         if len(name) > len(candidate.name):

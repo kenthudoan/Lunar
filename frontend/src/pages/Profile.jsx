@@ -25,40 +25,45 @@ function AvatarPicker({ value, onChange }) {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  const { bg, border, text } = AVATAR_COLORS[Math.floor((value?.charCodeAt(0) || 65) % AVATAR_COLORS.length)]
-  const emoji = value?.startsWith('e:') ? value.slice(2) : null
+  const raw = typeof value === 'string' ? value.trim() : ''
+  const isEmojiAvatar = /^e:/i.test(raw)
+  const emoji = isEmojiAvatar ? raw.slice(2) : null
+  const colorKey = (() => {
+    if (!raw) return 65
+    const idx = isEmojiAvatar ? 2 : 0
+    const cp = raw.codePointAt(idx)
+    return cp !== undefined && !Number.isNaN(cp) ? cp : 65
+  })()
+  const { bg, border, text } = AVATAR_COLORS[Math.floor(colorKey % AVATAR_COLORS.length)]
 
   return (
     <div ref={ref} className="relative">
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="w-20 h-20 rounded-2xl flex items-center justify-center text-3xl transition-transform hover:scale-105 border-2"
-        style={{ background: bg, borderColor: border, color: emoji ? 'transparent' : text, textShadow: emoji ? 'none' : '0 0 8px currentColor' }}
+        className="w-14 h-14 rounded-xl flex items-center justify-center text-2xl transition-transform hover:scale-105 border-2"
+        style={{ background: bg, borderColor: border, color: text, textShadow: emoji ? 'none' : '0 0 8px currentColor' }}
       >
         {emoji ? (
-          <span style={{ fontSize: '2rem', filter: 'drop-shadow(0 0 6px rgba(255,255,255,0.5))' }}>{emoji}</span>
+          <span style={{ fontSize: '1.5rem', color: '#f4f4f8', filter: 'drop-shadow(0 0 6px rgba(255,255,255,0.45))' }}>{emoji}</span>
         ) : (
-          <span>{String.fromCodePoint(value?.charCodeAt(0) || 65)}</span>
+          <span>{String.fromCodePoint(raw.charCodeAt(0) || 65)}</span>
         )}
       </button>
       {open && (
         <div className="absolute top-full left-0 mt-2 z-50 p-3 rounded-xl border border-[var(--border-default)] w-56" style={{ background: 'var(--bg-elevated)' }}>
           <p className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-wider mb-2">{t('profile.backgroundColor')}</p>
           <div className="grid grid-cols-6 gap-1.5 mb-3">
-            {AVATAR_COLORS.map((c, i) => {
-              const letter = String.fromCharCode(65 + i)
-              return (
-                <button
-                  key={i}
-                  onClick={() => { onChange(letter); setOpen(false) }}
-                  className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold transition-transform hover:scale-110"
-                  style={{ background: c.bg, borderColor: c.border, borderWidth: 2, color: c.text }}
-                >
-                  {letter}
-                </button>
-              )
-            })}
+            {AVATAR_COLORS.map((c, i) => (
+              <button
+                key={i}
+                onClick={() => { onChange(String.fromCharCode(65 + i)); setOpen(false) }}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold transition-transform hover:scale-110"
+                style={{ background: c.bg, borderColor: c.border, borderWidth: 2, color: c.text }}
+              >
+                {String.fromCharCode(65 + i)}
+              </button>
+            ))}
           </div>
           <p className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-wider mb-2">{t('profile.emoji')}</p>
           <div className="grid grid-cols-5 gap-1">
@@ -74,18 +79,6 @@ function AvatarPicker({ value, onChange }) {
           </div>
         </div>
       )}
-    </div>
-  )
-}
-
-// ---- Section card ----
-function SectionCard({ title, children }) {
-  return (
-    <div className="card p-5 space-y-4">
-      <div className="flex items-center gap-2">
-        <h2 className="text-sm font-semibold text-[var(--text-primary)]">{title}</h2>
-      </div>
-      {children}
     </div>
   )
 }
@@ -129,33 +122,26 @@ export default function Profile() {
   const [stats, setStats] = useState({ total_scenarios: 0, total_campaigns: 0, total_events: 0 })
   const [loadingStats, setLoadingStats] = useState(true)
 
-  // Edit profile state
   const [editUsername, setEditUsername] = useState('')
   const [editBio, setEditBio] = useState('')
   const [editAvatar, setEditAvatar] = useState('')
   const [editingProfile, setEditingProfile] = useState(false)
   const [profileSaved, setProfileSaved] = useState(false)
 
-  // Password state
   const [oldPw, setOldPw] = useState('')
   const [newPw, setNewPw] = useState('')
   const [confirmPw, setConfirmPw] = useState('')
   const [pwError, setPwError] = useState('')
   const [pwSuccess, setPwSuccess] = useState(false)
   const [changingPw, setChangingPw] = useState(false)
+  const [pwOpen, setPwOpen] = useState(false)
 
-  // Delete state
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [deleting, setDeleting] = useState(false)
-
-  // Toast
   const [toast, setToast] = useState(null)
 
   useEffect(() => {
-    fetchUserStats()
-      .then(setStats)
-      .catch(() => {})
-      .finally(() => setLoadingStats(false))
+    fetchUserStats().then(setStats).catch(() => {}).finally(() => setLoadingStats(false))
   }, [])
 
   useEffect(() => {
@@ -177,10 +163,9 @@ export default function Profile() {
       updateUser(updated)
       setToast({ message: t('profile.profileSaved'), type: 'success' })
       setProfileSaved(true)
-      setTimeout(() => setProfileSaved(false), 2000)
+      setTimeout(() => { setProfileSaved(false); setEditingProfile(false) }, 2000)
     } catch (e) {
       setToast({ message: e.message, type: 'error' })
-    } finally {
       setEditingProfile(false)
     }
   }
@@ -197,7 +182,7 @@ export default function Profile() {
       setNewPw('')
       setConfirmPw('')
       setPwSuccess(true)
-      setTimeout(() => setPwSuccess(false), 3000)
+      setTimeout(() => { setPwSuccess(false); setPwOpen(false) }, 3000)
     } catch (e) {
       setPwError(e.message)
     } finally {
@@ -221,7 +206,8 @@ export default function Profile() {
   const createdDate = user?.created_at ? new Date(user.created_at).toLocaleDateString('vi-VN', { day: '2-digit', month: 'long', year: 'numeric' }) : null
 
   return (
-    <div className="max-w-xl mx-auto px-4 py-8 space-y-6">
+    <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
+      <h1 className="text-lg font-bold text-[var(--text-primary)] mb-4">{t('nav.profile')}</h1>
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
       {showDeleteModal && (
         <ConfirmModal
@@ -233,111 +219,116 @@ export default function Profile() {
       )}
 
       {/* Header */}
-      <div className="flex items-start gap-4">
-        <AvatarPicker value={editAvatar} onChange={setEditAvatar} />
-        <div className="flex-1 pt-1 space-y-1">
-          <h1 className="text-lg font-bold text-[var(--text-primary)]">{user?.username || '—'}</h1>
-          <p className="text-sm text-[var(--text-tertiary)]">{user?.email || '—'}</p>
-          {user?.is_admin && <span className="badge badge-warning text-[8px]">Admin</span>}
-          {createdDate && (
-            <p className="text-xs text-[var(--text-disabled)]">{t('profile.joined', { date: createdDate })}</p>
-          )}
-        </div>
+      <div className="card p-5">
+        {!editingProfile ? (
+          <div className="flex items-center gap-3">
+            {user?.avatar ? (
+              <AvatarPicker value={user.avatar} onChange={() => {}} />
+            ) : (
+              <div className="w-14 h-14 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-default)] flex items-center justify-center text-xl font-bold text-[var(--text-tertiary)]">
+                {String.fromCodePoint(user?.username?.charCodeAt(0) || 65)}
+              </div>
+            )}
+            <div className="flex-1 min-w-0 space-y-0.5">
+              <h1 className="text-base font-bold text-[var(--text-primary)] truncate">{user?.username || '—'}</h1>
+              <p className="text-sm text-[var(--text-tertiary)] truncate">{user?.email || '—'}</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                {user?.is_admin && <span className="badge badge-warning text-[8px]">Admin</span>}
+                {createdDate && <span className="text-[10px] text-[var(--text-disabled)]">{t('profile.joined', { date: createdDate })}</span>}
+              </div>
+            </div>
+            <button onClick={() => setEditingProfile(true)} className="btn btn-ghost text-xs shrink-0">
+              {t('profile.editProfile')}
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-start gap-3">
+              <AvatarPicker value={editAvatar} onChange={setEditAvatar} />
+              <div className="flex-1 space-y-2">
+                <input
+                  value={editUsername}
+                  onChange={(e) => setEditUsername(e.target.value)}
+                  maxLength={50}
+                  className="input w-full text-sm"
+                  placeholder={t('profile.usernamePlaceholder')}
+                />
+                <textarea
+                  value={editBio}
+                  onChange={(e) => setEditBio(e.target.value)}
+                  maxLength={500}
+                  rows={2}
+                  className="input w-full text-sm resize-none"
+                  placeholder={t('profile.bioPlaceholder')}
+                />
+                <p className="text-[10px] text-[var(--text-disabled)] text-right">{editBio.length}/500</p>
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setEditingProfile(false)} className="btn btn-ghost text-xs">{t('generic.cancel')}</button>
+              <button onClick={handleSaveProfile} disabled={profileSaved} className={`btn btn-primary text-xs ${profileSaved ? 'opacity-80' : ''}`}>
+                {profileSaved ? t('profile.saved') : t('profile.saveProfile')}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Stats */}
-      <SectionCard title={t('profile.stats')}>
-        <div className="grid grid-cols-3 gap-3">
+      <div className="card p-5">
+        <h2 className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider mb-3">{t('profile.stats')}</h2>
+        <div className="grid grid-cols-3 gap-2">
           {[
             { label: t('profile.worlds'), value: stats.total_scenarios, color: 'text-[var(--accent)]' },
             { label: t('profile.adventures'), value: stats.total_campaigns, color: 'text-[var(--info)]' },
             { label: t('profile.actions'), value: stats.total_events, color: 'text-[var(--warning)]' },
           ].map((s) => (
-            <div key={s.label} className="text-center p-3 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)]">
-              <div className={`text-xl font-bold ${s.color}`}>{loadingStats ? '—' : s.value}</div>
-              <div className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-wider mt-1">{s.label}</div>
+            <div key={s.label} className="text-center p-2.5 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)]">
+              <div className={`text-lg font-bold ${s.color}`}>{loadingStats ? '—' : s.value}</div>
+              <div className="text-[9px] text-[var(--text-tertiary)] uppercase tracking-wider mt-0.5">{s.label}</div>
             </div>
           ))}
         </div>
-      </SectionCard>
+      </div>
 
-      {/* Edit profile */}
-      <SectionCard title={t('profile.editProfile')}>
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <label className="text-xs text-[var(--text-tertiary)]">{t('profile.username')}</label>
-            <input
-              value={editUsername}
-              onChange={(e) => setEditUsername(e.target.value)}
-              maxLength={50}
-              className="input w-full text-sm"
-              placeholder={t('profile.usernamePlaceholder')}
-            />
+      {/* Password */}
+      <div className="card p-5">
+        <h2 className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider mb-3">{t('profile.changePassword')}</h2>
+        {!pwOpen ? (
+          <button onClick={() => setPwOpen(true)} className="btn btn-ghost text-xs w-full">{t('profile.changePassword')}</button>
+        ) : (
+          <div className="space-y-2">
+            <div className="space-y-1">
+              <label className="text-xs text-[var(--text-tertiary)]">{t('profile.currentPassword')}</label>
+              <input type="password" value={oldPw} onChange={(e) => setOldPw(e.target.value)} className="input w-full text-sm" placeholder="••••••••" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-[var(--text-tertiary)]">{t('profile.newPassword')}</label>
+              <input type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)} className="input w-full text-sm" placeholder={t('profile.newPasswordPlaceholder')} />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-[var(--text-tertiary)]">{t('profile.confirmNewPassword')}</label>
+              <input type="password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} className="input w-full text-sm" placeholder={t('profile.confirmNewPasswordPlaceholder')} />
+            </div>
+            {pwError && <p className="text-xs text-[var(--error)]">{pwError}</p>}
+            {pwSuccess && <p className="text-xs text-[var(--success)]">{t('profile.passwordChanged')}</p>}
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => { setPwOpen(false); setOldPw(''); setNewPw(''); setConfirmPw(''); setPwError('') }} className="btn btn-ghost text-xs">{t('generic.cancel')}</button>
+              <button onClick={handleChangePassword} disabled={changingPw} className="btn btn-primary text-xs">{changingPw ? t('profile.changingPassword') : t('profile.changePassword')}</button>
+            </div>
           </div>
-          <div className="space-y-1">
-            <label className="text-xs text-[var(--text-tertiary)]">{t('profile.bio')}</label>
-            <textarea
-              value={editBio}
-              onChange={(e) => setEditBio(e.target.value)}
-              maxLength={500}
-              rows={3}
-              className="input w-full text-sm resize-none"
-              placeholder={t('profile.bioPlaceholder')}
-            />
-            <p className="text-[10px] text-[var(--text-disabled)] text-right">{editBio.length}/500</p>
-          </div>
-          <button
-            onClick={handleSaveProfile}
-            disabled={editingProfile}
-            className={`btn btn-primary w-full text-sm ${profileSaved ? 'opacity-80' : ''}`}
-          >
-            {editingProfile ? t('profile.saving') : profileSaved ? t('profile.saved') : t('profile.saveProfile')}
-          </button>
-        </div>
-      </SectionCard>
-
-      {/* Change password */}
-      <SectionCard title={t('profile.changePassword')}>
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <label className="text-xs text-[var(--text-tertiary)]">{t('profile.currentPassword')}</label>
-            <input type="password" value={oldPw} onChange={(e) => setOldPw(e.target.value)} className="input w-full text-sm" placeholder="••••••••" />
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs text-[var(--text-tertiary)]">{t('profile.newPassword')}</label>
-            <input type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)} className="input w-full text-sm" placeholder={t('profile.newPasswordPlaceholder')} />
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs text-[var(--text-tertiary)]">{t('profile.confirmNewPassword')}</label>
-            <input type="password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} className="input w-full text-sm" placeholder={t('profile.confirmNewPasswordPlaceholder')} />
-          </div>
-          {pwError && <p className="text-xs text-[var(--error)]">{pwError}</p>}
-          {pwSuccess && <p className="text-xs text-[var(--success)]">{t('profile.passwordChanged')}</p>}
-          <button
-            onClick={handleChangePassword}
-            disabled={changingPw}
-            className="btn btn-ghost w-full text-sm"
-          >
-            {changingPw ? t('profile.changingPassword') : t('profile.changePassword')}
-          </button>
-        </div>
-      </SectionCard>
+        )}
+      </div>
 
       {/* Danger zone */}
-      <SectionCard title={t('profile.dangerZone')}>
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm text-[var(--text-primary)]">{t('profile.deleteAccountLabel')}</p>
-            <p className="text-xs text-[var(--text-tertiary)]">{t('profile.deleteAccountDesc')}</p>
-          </div>
-          <button
-            onClick={() => setShowDeleteModal(true)}
-            className="btn btn-danger text-sm shrink-0"
-          >
+      <div className="card p-5">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm text-[var(--text-tertiary)] flex-1">{t('profile.deleteAccountDesc')}</p>
+          <button onClick={() => setShowDeleteModal(true)} className="btn btn-danger text-xs shrink-0">
             {t('profile.deleteAccountLabel')}
           </button>
         </div>
-      </SectionCard>
+      </div>
     </div>
   )
 }

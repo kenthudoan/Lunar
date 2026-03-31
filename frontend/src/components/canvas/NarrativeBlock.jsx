@@ -1,8 +1,9 @@
 import ReactMarkdown from 'react-markdown'
+import { MENTION_SPLIT_REGEX, INTERNAL_TAG_STRIP_REGEX, stripPowerControlTags } from '../../utils/mentionRegex'
 
 function processChildren(children) {
   if (typeof children !== 'string') return children
-  const parts = children.split(/(@[A-Z\u00C0-\u024F][A-Za-z\u00C0-\u024F]*(?:\s+[A-Z\u00C0-\u024F][A-Za-z\u00C0-\u024F]*)*)/g)
+  const parts = children.split(MENTION_SPLIT_REGEX)
   if (parts.length === 1) return children
   return parts.map((part, i) =>
     part.startsWith('@')
@@ -19,10 +20,7 @@ const mentionComponents = {
 }
 
 export default function NarrativeBlock({ content, isStreaming = false, combatMode = false }) {
-  const cleaned = content
-    .replace(/\[ITEM_ADD:[^\]]+\]/g, '')
-    .replace(/\[ITEM_USE:[^\]]+\]/g, '')
-    .replace(/\[ITEM_LOSE:[^\]]+\]/g, '')
+  const cleaned = stripPowerControlTags(String(content || '')).replace(INTERNAL_TAG_STRIP_REGEX, '')
 
   return (
     <div className="prose-lunar">

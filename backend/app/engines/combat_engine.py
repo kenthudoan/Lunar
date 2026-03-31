@@ -56,15 +56,22 @@ class CombatEngine:
 
         reason = str(data.get("reason", "")).strip()
 
+        _rejection_reasons = {
+            "pt-br": {
+                "meta": "Meta-gaming: jogador tentou controlar o resultado por autoridade narrativa.",
+                "physically_impossible": "Ação fisicamente impossível rejeitada.",
+            },
+        }
+        reasons = _rejection_reasons.get(language, {})
         if data.get("is_meta"):
             return AntiGriefingResult(
                 rejected=True,
-                reason=reason or "Meta-gaming: tentativa de controlar o resultado por autoridade narrativa.",
+                reason=reason or reasons.get("meta", "Meta-gaming: player attempted to control the outcome by narrative authority."),
             )
         if data.get("is_physically_impossible"):
             return AntiGriefingResult(
                 rejected=True,
-                reason=reason or "Ação fisicamente impossível rejeitada.",
+                reason=reason or reasons.get("physically_impossible", "Physically impossible action rejected."),
             )
         return AntiGriefingResult(rejected=False)
 
@@ -73,25 +80,43 @@ class CombatEngine:
         action: str,
         npc_name: str,
         npc_power: int,
+        language: str = "en",
     ) -> ActionEvaluation:
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Score this combat action on 3 dimensions (0-10 each). "
-                    "Return ONLY JSON: "
-                    '{"coherence": N, "creativity": N, "context": N}. '
-                    "coherence: physical/logical feasibility (can a human actually do this?). "
-                    "creativity: tactical originality and detail — NOT text length. "
-                    "context: situational appropriateness for this opponent. "
-                    "A short creative action beats a long incoherent one."
-                ),
+        if language in ("pt", "pt-br"):
+            system = (
+                "Avalie esta ação de combate em 3 dimensões (0-10 cada). "
+                "Retorne APENAS JSON (todos os campos em português): "
+                '{"coherence": N, "creativity": N, "context": N}. '
+                "coherence: viabilidade física/lógica (um humano pode realmente fazer isso?). "
+                "creativity: originalidade tática e detalhamento — NÃO é comprimento do texto. "
+                "context: adequação situacional para este oponente. "
+                "Uma ação curta mas criativa vence uma ação longa incoerente."
+            )
+        else:
+            system = (
+                "Score this combat action on 3 dimensions (0-10 each). "
+                "Return ONLY JSON: "
+                '{"coherence": N, "creativity": N, "context": N}. '
+                "coherence: physical/logical feasibility (can a human actually do this?). "
+                "creativity: tactical originality and detail — NOT text length. "
+                "context: situational appropriateness for this opponent. "
+                "A short creative action beats a long incoherent one."
+            )
+        _user_prompts = {
+            "pt-br": {
+                "action_label": "Ação",
+                "opponent_label": "Oponente",
+                "power_label": "poder",
             },
+        }
+        up = _user_prompts.get(language, {"action_label": "Action", "opponent_label": "Opponent", "power_label": "power"})
+        messages = [
+            {"role": "system", "content": system},
             {
                 "role": "user",
                 "content": (
-                    f"Action: {action}\n"
-                    f"Opponent: {npc_name} (power {npc_power}/10)"
+                    f"{up['action_label']}: {action}\n"
+                    f"{up['opponent_label']}: {npc_name} ({up['power_label']} {npc_power}/10)"
                 ),
             },
         ]

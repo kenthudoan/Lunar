@@ -2,6 +2,9 @@ import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useI18n } from '../i18n'
 import { createScenario, importScenario } from '../api'
+import { otherGenresPartA } from '../data/scenarioGenrePresets.restA'
+import { otherGenresPartB } from '../data/scenarioGenrePresets.restB'
+import { tienHiepGenre } from '../data/scenarioGenrePresets.tienHiep'
 
 // ---- Genre Presets ----
 const GENRES = [
@@ -9,68 +12,52 @@ const GENRES = [
     id: 'fantasy',
     label: { vi: 'Fantasy', en: 'Fantasy' },
     icon: '⚔',
-    description: { vi: 'Phép thuật, rồng, và những vương quốc cổ xưa', en: 'Magic, dragons, and ancient kingdoms' },
     tone: { vi: 'Ao tuong, huyền thoại, cao trào. Hanh dong phép thuật duoc cho phep. Phat trien the gioi rong mo.', en: 'Epic, mythic, grand scale. Magical actions allowed. Vast open world.' },
   },
   {
     id: 'scifi',
     label: { vi: 'Khoa Học Viễn Tưởng', en: 'Sci-Fi' },
     icon: '🚀',
-    description: { vi: 'Công nghệ tương lai, vũ trụ, và những bí ẩn ngoài hành tinh', en: 'Future tech, space, and alien mysteries' },
     tone: { vi: 'Hiện đại, logic, phát hiện. Công nghệ cao cấp có sẵn. Khám phá vũ trụ và các hành tinh.', en: 'Modern, logical, investigative. Advanced tech available. Space and planetary exploration.' },
   },
   {
     id: 'cyberpunk',
     label: { vi: 'Cyberpunk', en: 'Cyberpunk' },
     icon: '💀',
-    description: { vi: 'Công nghệ lấn át con người, tương lai u ám của đô thị', en: 'Tech over humanity, dystopian urban future' },
     tone: { vi: 'U ám, nguy cơ, phản điệp. Internet va AI xam nhập đoi song. Công nghệ nan giới, đạo đức mờ ám.', en: 'Dark, gritty, noir. Tech infiltrates daily life. Moral ambiguity, corporate dominance.' },
   },
   {
     id: 'horror',
     label: { vi: 'Kinh Dị', en: 'Horror' },
     icon: '🩸',
-    description: { vi: 'Không khí căng thẳng, quái vật, và bí mật đen tối', en: 'Tense atmosphere, monsters, and dark secrets' },
     tone: { vi: 'Manchay, u an, day nạ. Sợ hãi và khám phá. Không có siêu nhiên nào biết trước — mọi thứ đều đáng sợ.', en: 'Eerie, unsettling, dread. Fear and discovery. No safe havens — everything can be terrifying.' },
   },
   {
     id: 'historical',
     label: { vi: 'Lịch Sử', en: 'Historical' },
     icon: '📜',
-    description: { vi: 'Các sự kiện và thời đại lịch sử với chi tiết chân thực', en: 'Historical periods and events with authentic detail' },
     tone: { vi: 'Chân thực, chi tiết, nhập vai. Không có ma thuật. Lịch sử được nghiên cứu kỹ.', en: 'Authentic, detailed, immersive. No magic. Well-researched historical accuracy.' },
   },
   {
     id: 'mystery',
-    label: { vi: ' Bí Ẩn', en: 'Mystery' },
+    label: { vi: 'Bí Ẩn', en: 'Mystery' },
     icon: '🔍',
-    description: { vi: 'Điều tra, bí ẩn, và những manh mối cần giải mã', en: 'Investigation, secrets, and clues to unravel' },
     tone: { vi: 'Hồi hộp, suy luận, bất ngờ. Người chơi là thám tử. Câu đố cần được giải mã qua hành động.', en: 'Thrilling, deductive, surprising. Player is the detective. Puzzles solved through action.' },
   },
 ]
 
-const LANGUAGES = [
-  { value: 'en',    label: 'English' },
-  { value: 'vi',    label: 'Tiếng Việt' },
-  { value: 'pt-br', label: 'Português (BR)' },
+// ---- All genre categories (basic + presets) ----
+const ALL_GENRE_CATEGORIES = [
+  { id: 'basic', label: { vi: 'Cơ Bản', en: 'Basic' }, icon: '⭐', genres: GENRES },
+  { id: tienHiepGenre.id, label: tienHiepGenre.label, icon: tienHiepGenre.icon, genres: tienHiepGenre.subGenres.map((sg) => ({ id: sg.id, label: sg.label, icon: null, tone: null, preset: sg.preset })) },
+  ...otherGenresPartA.map((cat) => ({ id: cat.id, label: cat.label, icon: cat.icon, genres: cat.subGenres.map((sg) => ({ id: sg.id, label: sg.label, icon: null, tone: null, preset: sg.preset })) })),
+  ...otherGenresPartB.map((cat) => ({ id: cat.id, label: cat.label, icon: cat.icon, genres: cat.subGenres.map((sg) => ({ id: sg.id, label: sg.label, icon: null, tone: null, preset: sg.preset })) })),
 ]
 
-// ---- Section Header ----
-function SectionHeader({ number, title, description }) {
-  return (
-    <div className="mb-5">
-      <div className="flex items-center gap-3 mb-1">
-        <span className="w-6 h-6 rounded-full bg-[var(--accent-muted)] border border-[var(--border-default)] flex items-center justify-center text-[10px] font-bold font-mono text-[var(--text-secondary)]">
-          {number}
-        </span>
-        <h2 className="text-base font-semibold text-[var(--text-primary)]">{title}</h2>
-      </div>
-      {description && (
-        <p className="text-sm text-[var(--text-tertiary)] pl-9">{description}</p>
-      )}
-    </div>
-  )
-}
+const LANGS = [
+  { value: 'vi', label: 'Tiếng Việt' },
+  { value: 'en', label: 'English' },
+]
 
 export default function ScenarioBuilder() {
   const { t } = useI18n()
@@ -82,11 +69,12 @@ export default function ScenarioBuilder() {
     description: '',
     tone_instructions: '',
     opening_narrative: '',
-    language: 'en',
+    language: 'vi',
     lore_text: '',
   })
 
   const [genre, setGenre] = useState(null)
+  const [activeCategory, setActiveCategory] = useState('basic')
   const [importPayload, setImportPayload] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -94,18 +82,34 @@ export default function ScenarioBuilder() {
 
   const update = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }))
 
-  // Autofill from genre
+  const lang = localStorage.getItem('lunar_language') || 'en'
+
   const applyGenre = (g) => {
-    setGenre(g.id)
-    const locale = localStorage.getItem('lunar_language') || 'en'
-    setForm((f) => ({
-      ...f,
-      tone_instructions: g.tone[locale] || g.tone.en,
-      title: f.title || g.label[locale] || g.label.en,
-    }))
+    if (g.preset) {
+      // Full preset: apply all fields
+      setGenre(g.id)
+      setForm((f) => ({
+        ...f,
+        title: g.preset.title || f.title,
+        description: g.preset.description || f.description,
+        tone_instructions: g.preset.tone_instructions || f.tone_instructions,
+        opening_narrative: g.preset.opening_narrative || f.opening_narrative,
+        language: g.preset.language || lang,
+        lore_text: g.preset.lore_text || f.lore_text,
+      }))
+    } else {
+      // Basic genre: tone only
+      setGenre(g.id)
+      setForm((f) => ({
+        ...f,
+        tone_instructions: g.tone[lang] || g.tone.en,
+        title: f.title || g.label[lang] || g.label.en,
+      }))
+    }
   }
 
-  // Import JSON file
+  const currentCategories = ALL_GENRE_CATEGORIES
+
   const handleFileLoad = (e) => {
     const file = e.target.files[0]
     if (!file) return
@@ -121,13 +125,13 @@ export default function ScenarioBuilder() {
           description: parsed.scenario.description || '',
           tone_instructions: parsed.scenario.tone_instructions || '',
           opening_narrative: parsed.scenario.opening_narrative || '',
-          language: parsed.scenario.language || 'en',
+          language: parsed.scenario.language || 'vi',
           lore_text: parsed.scenario.lore_text || '',
         })
         setImportPayload(parsed)
         setError(null)
-      } catch (err) {
-        setError(err.message === 'Invalid format' ? 'Invalid structure. Missing "scenario" object.' : 'Failed to parse JSON file.')
+      } catch {
+        setError('Invalid structure. Missing "scenario" object.')
       }
     }
     reader.readAsText(file)
@@ -140,11 +144,10 @@ export default function ScenarioBuilder() {
     setLoading(true)
     setError(null)
     try {
-      let scenario
       if (importPayload) {
-        scenario = await importScenario({ ...importPayload, scenario: form })
+        await importScenario({ ...importPayload, scenario: form })
       } else {
-        scenario = await createScenario(form)
+        await createScenario(form)
       }
       setSubmitted(true)
       setTimeout(() => navigate('/'), 800)
@@ -155,234 +158,203 @@ export default function ScenarioBuilder() {
     }
   }
 
-  const locale = localStorage.getItem('lunar_language') || 'en'
-
   return (
     <div className="min-h-screen bg-[var(--bg-base)]">
-      {/* Topbar */}
-      <div className="sticky top-[var(--header-height)] z-20 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)]/90 backdrop-blur-xl px-4 py-3">
-        <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="text-sm font-semibold text-[var(--text-primary)]">{t('nav.create')}</span>
-            {genre && (
-              <span className="text-xs text-[var(--text-tertiary)] bg-[var(--accent-muted)] px-2 py-0.5 rounded-full border border-[var(--border-subtle)]">
-                {GENRES.find((g) => g.id === genre)?.label[locale]}
-              </span>
-            )}
+      <div className="max-w-2xl mx-auto px-4 py-6">
+        <h1 className="text-lg font-bold text-[var(--text-primary)] mb-4">{t('nav.create')}</h1>
+        <form onSubmit={handleSubmit} className="space-y-4">
+
+        {/* Genre category tabs */}
+        <div className="card p-4 space-y-3">
+          <p className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider mb-2">
+            {lang === 'vi' ? 'Chọn Thể Loại' : 'Choose Genre'}
+          </p>
+          {/* Category tabs */}
+          <div className="flex flex-wrap gap-1 mb-2">
+            {currentCategories.map((cat) => (
+              <button
+                key={cat.id}
+                type="button"
+                onClick={() => setActiveCategory(cat.id)}
+                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs transition-all ${
+                  activeCategory === cat.id
+                    ? 'bg-[var(--accent-muted)] border-[var(--border-strong)] text-[var(--text-primary)]'
+                    : 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-tertiary)] hover:border-[var(--border-default)]'
+                }`}
+              >
+                {cat.icon && <span>{cat.icon}</span>}
+                <span>{cat.label[lang] || cat.label.en}</span>
+              </button>
+            ))}
           </div>
-          {importPayload && (
-            <span className="badge badge-success">
-              <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" /></svg>
-              {t('scenario.imported')}
-            </span>
-          )}
-        </div>
-      </div>
-
-      <div className="max-w-3xl mx-auto px-4 py-8">
-        <form onSubmit={handleSubmit} className="space-y-10">
-
-          {/* Section 1: Genre */}
-          <section>
-            <SectionHeader
-              number={1}
-              title={locale === 'vi' ? 'Chọn Thể Loại' : 'Choose Genre'}
-              description={locale === 'vi' ? 'Chọn thể loại để bắt đầu hoặc bỏ qua để tự do.' : 'Select a genre for presets, or skip for full freedom.'}
-            />
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              {GENRES.map((g) => {
-                const isActive = genre === g.id
-                return (
+          {/* Sub-genre pills */}
+          {(() => {
+            const activeCat = currentCategories.find((c) => c.id === activeCategory)
+            if (!activeCat) return null
+            return (
+              <div className="flex flex-wrap gap-1.5">
+                {activeCat.genres.map((g) => (
                   <button
                     key={g.id}
                     type="button"
                     onClick={() => applyGenre(g)}
-                    className={`
-                      p-4 rounded-xl border text-left transition-all duration-200
-                      ${isActive
-                        ? 'bg-[var(--accent-muted)] border-[var(--border-strong)] shadow-[var(--shadow-glow)]'
-                        : 'bg-[var(--bg-surface)] border-[var(--border-subtle)] hover:border-[var(--border-default)] hover:bg-[var(--bg-elevated)]'
-                      }
-                    `}
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs transition-all ${
+                      genre === g.id
+                        ? 'bg-[var(--accent)] border-[var(--border-strong)] text-white'
+                        : 'bg-[var(--bg-elevated)] border-[var(--border-subtle)] text-[var(--text-tertiary)] hover:border-[var(--border-default)] hover:text-[var(--text-secondary)]'
+                    }`}
                   >
-                    <div className="text-2xl mb-2">{g.icon}</div>
-                    <div className={`text-sm font-semibold mb-1 ${isActive ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}`}>
-                      {g.label[locale]}
-                    </div>
-                    <div className="text-[11px] text-[var(--text-tertiary)] leading-relaxed hidden sm:block">
-                      {g.description[locale]}
-                    </div>
+                    {g.icon && <span>{g.icon}</span>}
+                    <span>{g.label[lang] || g.label.en}</span>
+                    {g.preset && (
+                      <span className="ml-1 text-[9px] opacity-60">✨</span>
+                    )}
                   </button>
-                )
-              })}
-            </div>
-          </section>
-
-          {/* Section 2: Core Identity */}
-          <section>
-            <SectionHeader
-              number={2}
-              title={locale === 'vi' ? 'Bản Sắc Thế Giới' : 'World Identity'}
-              description={locale === 'vi' ? 'Tiêu đề và mô tả cơ bản của thế giới.' : 'The basic title and description of your world.'}
-            />
-            <div className="space-y-4">
-              <div>
-                <label className="label">{t('scenario.title')} <span className="text-[var(--error)]">*</span></label>
-                <input
-                  value={form.title}
-                  onChange={update('title')}
-                  placeholder={locale === 'vi' ? 'VD: Thế Giới Bóng Tối — Quốc Gia Đổ Nát' : 'e.g. The Shattered Kingdoms'}
-                  required
-                  className="input"
-                  autoFocus
-                />
+                ))}
               </div>
-              <div>
-                <label className="label">{t('scenario.description')}</label>
-                <textarea
-                  value={form.description}
-                  onChange={update('description')}
-                  placeholder={locale === 'vi' ? 'Một lời mô tả ngắn về thế giới của bạn...' : 'A brief description of your world...'}
-                  rows={2}
-                  className="input textarea"
-                />
-              </div>
-              <div>
-                <label className="label">{t('scenario.language')}</label>
-                <select value={form.language} onChange={update('language')} className="input select">
-                  {LANGUAGES.map((l) => (
-                    <option key={l.value} value={l.value}>{l.label}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </section>
+            )
+          })()}
+        </div>
 
-          {/* Section 3: Tone */}
-          <section>
-            <SectionHeader
-              number={3}
-              title={t('scenario.tone')}
-              description={locale === 'vi' ? 'Giọng điệu, luật lệ, và bầu không khí của thế giới. Đây sẽ ảnh hưởng đến cách AI kể chuyện.' : 'Tone, rules, and atmosphere of the world. This influences how the AI narrates.'}
-            />
-            <textarea
-              value={form.tone_instructions}
-              onChange={update('tone_instructions')}
-              placeholder={
-                locale === 'vi'
-                  ? 'VD: Nghiêm túc, hồi hộp, đạo đức xám xịt. Hành động bạo lực được cho phép nhưng không tỉ mỉ. Mọi quyết định có hậu quả thực sự...'
-                  : 'e.g. Dark, gritty, morally grey. Violence is allowed but not gratuitous. Every choice has real consequences...'
-              }
-              rows={4}
-              className="input textarea"
-            />
-          </section>
+        {/* Core info */}
+        <div className="card p-5 space-y-4">
+          <p className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider">{lang === 'vi' ? 'Bản Sắc Thế Giới' : 'World Identity'}</p>
 
-          {/* Section 4: Opening */}
-          <section>
-            <SectionHeader
-              number={4}
-              title={t('scenario.opening')}
-              description={locale === 'vi' ? 'Câu chuyện mở đầu — đoạn văn đầu tiên được trình bày cho người chơi khi bắt đầu.' : 'The opening narrative — the first passage presented to the player.'}
+          <div className="space-y-1">
+            <label className="label text-sm">{t('scenario.title')} <span className="text-[var(--error)]">*</span></label>
+            <input
+              value={form.title}
+              onChange={update('title')}
+              placeholder={lang === 'vi' ? 'VD: Thế Giới Bóng Tối' : 'e.g. The Shattered Kingdoms'}
+              required
+              className="input text-sm"
+              autoFocus
             />
-            <textarea
-              value={form.opening_narrative}
-              onChange={update('opening_narrative')}
-              placeholder={
-                locale === 'vi'
-                  ? 'VD: Bạn tỉnh dậy trong một căn phòng tối. Không khí nồng nặc mùi máu. Một tiếng rên rỉ vọng lại từ hành lang...'
-                  : 'e.g. You wake in a dark room. The air is thick with the smell of blood. A groan echoes from the corridor...'
-              }
-              rows={5}
-              className="input textarea"
-            />
-          </section>
-
-          {/* Section 5: Lore */}
-          <section>
-            <SectionHeader
-              number={5}
-              title={t('scenario.lore')}
-              description={t('scenario.loreHint')}
-            />
-            <textarea
-              value={form.lore_text}
-              onChange={update('lore_text')}
-              placeholder={
-                locale === 'vi'
-                  ? 'Dán chi tiết thế giới, lịch sử nhân vật, bối cảnh địa lý, phe phái, và mọi thứ bạn muốn AI biết về thế giới này...'
-                  : 'Paste world details, character backgrounds, geography, factions, and anything you want the AI to know about this world...'
-              }
-              rows={8}
-              className="input textarea"
-            />
-          </section>
-
-          {/* Section 6: Import */}
-          <section>
-            <SectionHeader
-              number={6}
-              title={locale === 'vi' ? 'Hoặc Nhập Từ File' : 'Or Import from File'}
-              description={locale === 'vi' ? 'Tải lên file JSON đã export trước đó. Dữ liệu sẽ đè lên các trường bên trên.' : 'Upload a previously exported JSON file. Data will overwrite the fields above.'}
-            />
-            <div className="flex items-center gap-4">
-              <input ref={fileRef} type="file" accept=".json" className="hidden" onChange={handleFileLoad} />
-              <button
-                type="button"
-                onClick={() => fileRef.current?.click()}
-                className="btn btn-secondary btn-sm"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                  <polyline points="17 8 12 3 7 8" />
-                  <line x1="12" y1="3" x2="12" y2="15" />
-                </svg>
-                {t('scenario.import')}
-              </button>
-              {importPayload && (
-                <span className="badge badge-success">
-                  <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" /></svg>
-                  {t('scenario.imported')}
-                </span>
-              )}
-            </div>
-          </section>
-
-          {/* Error */}
-          {error && (
-            <div className="p-4 rounded-xl bg-[var(--error-muted)] border border-[rgba(248,113,113,0.2)] flex items-center gap-3 text-[var(--error)] text-sm font-medium">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
-              {error}
-            </div>
-          )}
-
-          {/* Submit */}
-          <div className="pt-4 border-t border-[var(--border-subtle)]">
-            <button
-              type="submit"
-              disabled={loading || !form.title.trim() || submitted}
-              className="w-full btn btn-primary btn-lg"
-            >
-              {loading ? (
-                <>
-                  <svg className="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  {importPayload ? (locale === 'vi' ? 'Đang xử lý nhập...' : 'Processing Import...') : (locale === 'vi' ? 'Đang khởi tạo...' : 'Initializing...')}
-                </>
-              ) : submitted ? (
-                <>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12" /></svg>
-                  {locale === 'vi' ? 'Đã xong!' : 'Done!'}
-                </>
-              ) : (
-                importPayload ? t('scenario.submitImport') : t('scenario.submit')
-              )}
-            </button>
           </div>
 
-        </form>
+          <div className="space-y-1">
+            <label className="label text-sm">{t('scenario.description')}</label>
+            <textarea
+              value={form.description}
+              onChange={update('description')}
+              placeholder={lang === 'vi' ? 'Mô tả ngắn về thế giới...' : 'A brief description...'}
+              rows={2}
+              className="input textarea text-sm resize-none"
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <label className="text-sm text-[var(--text-tertiary)]">{t('scenario.language')}</label>
+            <div className="flex gap-1 p-1 rounded-lg bg-[var(--bg-elevated)] border border-[var(--border-subtle)]">
+              {LANGS.map((l) => (
+                <button
+                  key={l.value}
+                  type="button"
+                  onClick={() => setForm((f) => ({ ...f, language: l.value }))}
+                  className={`px-2.5 py-0.5 rounded-md text-xs font-medium transition-all ${
+                    form.language === l.value
+                      ? 'bg-[var(--accent)] text-white'
+                      : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'
+                  }`}
+                >
+                  {l.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Tone */}
+        <div className="card p-5 space-y-2">
+          <p className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider">{t('scenario.tone')}</p>
+          <textarea
+            value={form.tone_instructions}
+            onChange={update('tone_instructions')}
+            placeholder={lang === 'vi'
+              ? 'VD: Nghiêm túc, đạo đức xám. Hành động bạo lực được phép nhưng không tỉ mỉ...'
+              : 'e.g. Dark, gritty, morally grey. Violence allowed but not gratuitous...'}
+            rows={4}
+            className="input textarea text-sm resize-none"
+          />
+        </div>
+
+        {/* Opening */}
+        <div className="card p-5 space-y-2">
+          <p className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider">{t('scenario.opening')}</p>
+          <textarea
+            value={form.opening_narrative}
+            onChange={update('opening_narrative')}
+            placeholder={lang === 'vi'
+              ? 'VD: Bạn tỉnh dậy trong một căn phòng tối. Không khí nồng nặc mùi máu...'
+              : 'e.g. You wake in a dark room. The air is thick with the smell of blood...'}
+            rows={5}
+            className="input textarea text-sm resize-none"
+          />
+        </div>
+
+        {/* Lore */}
+        <div className="card p-5 space-y-2">
+          <p className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider">{t('scenario.lore')}</p>
+          <textarea
+            value={form.lore_text}
+            onChange={update('lore_text')}
+            maxLength={4000}
+            placeholder={lang === 'vi'
+              ? 'Dán chi tiết thế giới, lịch sử nhân vật, bối cảnh địa lý, phe phái...'
+              : 'Paste world details, character backgrounds, geography, factions...'}
+            rows={7}
+            className="input textarea text-sm resize-none"
+          />
+        </div>
+
+        {/* Import */}
+        <div className="card p-4">
+          <div className="flex items-center gap-3">
+            <input ref={fileRef} type="file" accept=".json" className="hidden" onChange={handleFileLoad} />
+            <button type="button" onClick={() => fileRef.current?.click()} className="btn btn-secondary text-xs">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+              {t('scenario.import')}
+            </button>
+            {importPayload && (
+              <span className="text-[10px] text-[var(--text-disabled)]">{t('scenario.imported')}</span>
+            )}
+          </div>
+        </div>
+
+        {/* Error */}
+        {error && (
+          <div className="flex items-center gap-2 text-sm text-[var(--error)] bg-[var(--error-muted)] border border-[rgba(248,113,113,0.2)] p-3 rounded-xl">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+            {error}
+          </div>
+        )}
+
+        {/* Submit */}
+        <button
+          type="submit"
+          disabled={loading || !form.title.trim() || submitted}
+          className="w-full btn btn-primary text-sm py-3"
+        >
+          {loading ? (
+            <svg className="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+          ) : submitted ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="mr-2"><polyline points="20 6 9 17 4 12" /></svg>
+          ) : null}
+          {loading
+            ? (importPayload ? (lang === 'vi' ? 'Đang xử lý...' : 'Processing...') : (lang === 'vi' ? 'Đang khởi tạo...' : 'Initializing...'))
+            : submitted
+            ? (lang === 'vi' ? 'Đã xong!' : 'Done!')
+            : importPayload ? t('scenario.submitImport') : t('scenario.submit')}
+        </button>
+
+      </form>
       </div>
     </div>
   )

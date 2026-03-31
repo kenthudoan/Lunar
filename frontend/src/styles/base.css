@@ -293,11 +293,11 @@ html {
     z-index: 100;
   }
 
-  /* ---- Prose — Narrative Reading ---- */
+  /* ---- Prose — Narrative Reading (uses CSS vars for font + size) ---- */
   .prose-lunar {
-    font-family: var(--font-prose);
-    font-size: 16.5px;
-    line-height: 1.8;
+    font-family: var(--reading-font-family);
+    font-size: var(--reading-font-size);
+    line-height: 1.85;
     color: var(--narrative-text);
     max-width: var(--content-max-width);
   }

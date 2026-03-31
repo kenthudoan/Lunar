@@ -232,6 +232,12 @@ class GenerateRequest(BaseModel):
     language: str = "en"
 
 
+class InjectPlotRequest(BaseModel):
+    type: str      # "npc", "event", "plot"
+    data: dict     # the generated content from /generate
+    language: str = "en"
+
+
 class TimeskipRequest(BaseModel):
     seconds: int
 
@@ -272,6 +278,11 @@ def _require_campaign_access(campaign_id: str, current_user: AuthUser) -> None:
 async def player_action(req: PlayerActionRequest, current_user: AuthUser = Depends(get_current_user)):
     _require_campaign_access(req.campaign_id, current_user)
     session = _ensure_session(req.campaign_id)
+
+    # Guard: prevent concurrent streams for the same campaign
+    if session._streaming:
+        raise HTTPException(409, "A stream is already in progress for this campaign")
+
     # Update session with request-specific values that may differ per action
     session.scenario_tone = req.scenario_tone or session.scenario_tone
     session.language = req.language or session.language
@@ -285,21 +296,62 @@ async def player_action(req: PlayerActionRequest, current_user: AuthUser = Depen
     _llm.config.max_tokens = req.max_tokens
 
     async def event_stream():
-        async for chunk in session.process_action(req.action, max_tokens=req.max_tokens):
-            # SSE requires each data line to be prefixed with "data:".
-            # This preserves paragraph breaks/newlines in streamed prose.
-            text = str(chunk).replace("\r\n", "\n").replace("\r", "\n")
-            for line in text.split("\n"):
-                yield f"data: {line}\n"
-            yield "\n"
-        yield "data: [DONE]\n\n"
+        try:
+            async for chunk in session.process_action(req.action, max_tokens=req.max_tokens):
+                # SSE requires each data line to be prefixed with "data:".
+                # This preserves paragraph breaks/newlines in streamed prose.
+                text = str(chunk).replace("\r\n", "\n").replace("\r", "\n")
+                for line in text.split("\n"):
+                    yield f"data: {line}\n"
+                yield "\n"
+            yield "data: [DONE]\n\n"
+        finally:
+            # Ensure _streaming is cleared even if an unexpected error occurs
+            session._streaming = False
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+@router.get("/{campaign_id}/pending-action")
+async def get_pending_action(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
+    """Check if the last PLAYER_ACTION is missing its NARRATOR_RESPONSE.
+    Returns the pending action text if found, else null."""
+    _require_campaign_access(campaign_id, current_user)
+    player_events = _event_store.get_by_type(campaign_id, EventType.PLAYER_ACTION)
+    if not player_events:
+        return {"pending": False, "action": None, "user_message_index": None}
+    last_player = sorted(player_events, key=lambda e: e.created_at)[-1]
+    # Check if there's a NARRATOR_RESPONSE after this action
+    narrator_responses = _event_store.get_by_type(campaign_id, EventType.NARRATOR_RESPONSE)
+    has_response = any(
+        r.created_at > last_player.created_at for r in narrator_responses
+    )
+    if has_response:
+        return {"pending": False, "action": None, "user_message_index": None}
+    # Index in GET /history `messages` for this PLAYER_ACTION (for Play UI "live" chapter).
+    timeline = sorted(
+        player_events + narrator_responses,
+        key=lambda e: e.created_at,
+    )
+    user_message_index = None
+    idx = 0
+    for ev in timeline:
+        if ev.event_type not in (EventType.PLAYER_ACTION, EventType.NARRATOR_RESPONSE):
+            continue
+        if ev.event_type == EventType.PLAYER_ACTION and ev.id == last_player.id:
+            user_message_index = idx
+        idx += 1
+    return {
+        "pending": True,
+        "action": last_player.payload.get("text", ""),
+        "action_id": last_player.id,
+        "created_at": last_player.created_at,
+        "user_message_index": user_message_index,
+    }
+
+
 @router.get("/{campaign_id}/history")
 async def get_history(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
-    _require_campaign_access(campaign_id, current_user)
     """Return PLAYER_ACTION and NARRATOR_RESPONSE events to rebuild chat UI."""
     events = _event_store.get_by_type(campaign_id, EventType.PLAYER_ACTION) + \
              _event_store.get_by_type(campaign_id, EventType.NARRATOR_RESPONSE)
@@ -312,6 +364,30 @@ async def get_history(campaign_id: str, current_user: AuthUser = Depends(get_cur
         else:
             messages.append({"role": "assistant", "content": text})
     return {"messages": messages}
+
+
+@router.get("/{campaign_id}/scenario")
+async def get_campaign_scenario(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
+    """Return scenario metadata for the Play UI (title, opening, tone) after a full page reload."""
+    _require_campaign_access(campaign_id, current_user)
+    store = ScenarioStore(_SCENARIO_DB_PATH)
+    try:
+        campaign = store.get_campaign(campaign_id)
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        scenario = store.get_scenario(campaign.scenario_id)
+        if not scenario:
+            raise HTTPException(status_code=404, detail="Scenario not found")
+        return {
+            "id": scenario.id,
+            "title": scenario.title,
+            "description": scenario.description,
+            "tone_instructions": scenario.tone_instructions,
+            "opening_narrative": scenario.opening_narrative,
+            "language": scenario.language,
+        }
+    finally:
+        store.close()
 
 
 @router.post("/{campaign_id}/rewind")
@@ -461,6 +537,67 @@ async def generate_content(campaign_id: str, req: GenerateRequest, current_user:
     return {"error": "Unknown type"}
 
 
+@router.post("/{campaign_id}/inject-plot")
+async def inject_plot(campaign_id: str, req: InjectPlotRequest, current_user: AuthUser = Depends(get_current_user)):
+    """
+    Write a PLOT_GENERATION event so the narrator becomes aware of the injected content.
+    Also logs a WORLD_EVENT journal entry for the player to see.
+    """
+    _require_campaign_access(campaign_id, current_user)
+
+    plot_type = req.type
+    data = req.data
+
+    # Get language for localized GM notes
+    session_language = _sessions[campaign_id].language if campaign_id in _sessions else req.language
+    _gm_note_labels = {
+        "vi": {"introducing": "Đang giới thiệu", "unexpected_event": "Sự kiện bất ngờ", "plot_arc": "Cung truyện", "gm_note": "[GHI CHÚ GM]"},
+        "pt-br": {"introducing": "Introduzindo", "unexpected_event": "Evento Inesperado", "plot_arc": "Arco Narrativo", "gm_note": "[NOTA DO GM]"},
+    }
+    gm = _gm_note_labels.get(session_language, {"introducing": "Introducing:", "unexpected_event": "Unexpected Event", "plot_arc": "Plot Arc", "gm_note": "[GM NOTE]"})
+
+    # Build a human-readable summary for the event log
+    if plot_type == "npc":
+        summary_text = f"{gm['introducing']}: {data.get('name','Unknown NPC')} — {data.get('appearance','')}"
+        narrative_summary = (
+            f"{gm['gm_note']} Nhân vật mới tên {data.get('name','Unknown')} "
+            f"(sức mạnh {data.get('power_level','?')}/10) đã xuất hiện. "
+            f"{data.get('personality','')} Mục tiêu: {data.get('goal','')} Bí mật: {data.get('secret','')}"
+        )
+        entities = [data.get("name", "")]
+    elif plot_type == "event":
+        summary_text = data.get("title", gm['unexpected_event'])
+        narrative_summary = f"{gm['gm_note']} Sự kiện thế giới: {data.get('title','')} — {data.get('description','')}"
+        entities = data.get("entities", [])
+    else:  # plot
+        summary_text = gm['plot_arc']
+        narrative_summary = f"{gm['gm_note']} Cung truyện đã được gieo: {data.get('text', data.get('summary', ''))}"
+        entities = []
+
+    _event_store.append(
+        campaign_id=campaign_id,
+        event_type=EventType.PLOT_GENERATION,
+        payload={
+            "kind": plot_type,
+            "source": "manual",
+            "data": data,
+            "narrative_text": narrative_summary,
+        },
+        narrative_time_delta=0,
+        location="plot",
+        entities=entities,
+    )
+
+    # Also log to journal so the player sees something happened
+    try:
+        await _journal.evaluate_and_log(campaign_id, summary_text, session_language)
+    except Exception:
+        logger.warning("Failed to log inject-plot to journal", exc_info=True)
+
+    logger.info("Plot injected: type=%s campaign=%s", plot_type, campaign_id)
+    return {"status": "injected", "type": plot_type, "summary": summary_text}
+
+
 @router.post("/{campaign_id}/inject-npc-seed")
 async def inject_npc_seed(campaign_id: str, req: GenerateRequest, current_user: AuthUser = Depends(get_current_user)):
     _require_campaign_access(campaign_id, current_user)
@@ -514,7 +651,11 @@ async def timeskip(campaign_id: str, req: TimeskipRequest, current_user: AuthUse
             await _journal.evaluate_and_log(campaign_id, world_changes, session_language)
         except Exception:
             logger.warning("Failed to log timeskip world changes into journal", exc_info=True)
-    return {"summary": world_changes or "Time passes quietly."}
+    _timeskip_fallback = {
+        "vi": "Thời gian trôi qua yên lặng.",
+        "pt-br": "O tempo passa silenciosamente.",
+    }
+    return {"summary": world_changes or _timeskip_fallback.get(session_language, "Time passes quietly.")}
 
 
 @router.get("/{campaign_id}/inventory")

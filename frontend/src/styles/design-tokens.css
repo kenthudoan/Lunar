@@ -2,7 +2,7 @@
    LUNAR DESIGN SYSTEM — CSS Custom Properties
    ============================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&family=Be+Vietnam+Pro:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Merriweather:ital,wght@0,300;0,400;0,700;0,900;1,400;1,700&display=swap');
 
 :root {
   /* ---- Surface Hierarchy ---- */
@@ -52,6 +52,13 @@
   --font-prose:     'Lora', Georgia, serif;
   --font-ui:        'DM Sans', system-ui, sans-serif;
   --font-mono:      'JetBrains Mono', 'Cascadia Code', monospace;
+  --font-reading-1: 'Be Vietnam Pro', 'Lora', Georgia, serif;
+  --font-reading-2: 'Inter', system-ui, sans-serif;
+  --font-reading-3: 'Merriweather', Georgia, serif;
+
+  /* ---- Reading Settings (controlled by user) ---- */
+  --reading-font-family: var(--font-prose);
+  --reading-font-size:   16.5px;
 
   /* ---- Spacing ---- */
   --space-1:  4px;
@@ -89,5 +96,5 @@
   /* ---- Layout ---- */
   --sidebar-width: 220px;
   --header-height: 56px;
-  --content-max-width: 780px;
+  --content-max-width: 920px;
 }
