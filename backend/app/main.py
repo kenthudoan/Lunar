@@ -12,6 +12,7 @@ else:
     logging.basicConfig(level=logging.INFO)
 from app.api.routes_scenarios import router as scenarios_router
 from app.api.routes_game import router as game_router, _llm
+from app.api.routes_expand import router as expand_router
 from app.api.routes_auth import router as auth_router
 from app.api.routes_admin import router as admin_router
 from app.engines.llm_router import LLMConfig, LLMProvider
@@ -34,6 +35,7 @@ app.add_middleware(
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
 app.include_router(scenarios_router, prefix="/api/scenarios", tags=["scenarios"])
+app.include_router(expand_router, prefix="/api/scenarios", tags=["scenarios"])
 app.include_router(game_router, prefix="/api/game", tags=["game"])
 
 

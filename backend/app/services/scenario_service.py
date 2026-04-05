@@ -31,11 +31,13 @@ class ScenarioService:
                     "Extract all named entities from this RPG world lore text. "
                     "Return ONLY a valid JSON array (no markdown): "
                     '[{"type": "NPC|LOCATION|FACTION|ITEM", "name": str, "content": {...}}]. '
-                    "For NPC content include: personality, power_level (1-10), secret. "
+                    "For NPC content include: personality, realm (e.g. 'Tu Chân' or 'Ma Đạo' — use DISPLAY NAME, not internal key), tier (e.g. 'Trúc Cơ' — DISPLAY NAME), "
+                    "power_level (1-10, derived from realm+tier), secret. "
                     "For LOCATION content include: description. "
-                    "For FACTION content include: goals, power_level. "
+                    "For FACTION content include: goals, realm (DISPLAY NAME). "
                     "For ITEM content include: description, significance. "
-                    "Only include entities explicitly mentioned by name."
+                    "CRITICAL: All text values must be human-readable DISPLAY NAMES in the world's language (e.g. 'Vũ Khí', 'Núi', 'Môn Phái'). "
+                    "Do NOT use underscore_separated keys like 'vu_khi', 'nui', 'tu_chan' as values."
                     + lang_hint
                 ),
             },

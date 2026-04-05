@@ -220,7 +220,7 @@ export default function Play() {
     addJournalEntry, setJournal,
     setInventory, addInventoryItem, updateInventoryItem: updateInventoryStore,
     clearSession,
-    maxTokens, llmProvider, llmModel, temperature,
+    maxTokens, llmProvider, llmModel, temperature, streamDeliverySpeed,
     setChapters: setChaptersInStore,
   } = useGameStore()
 
@@ -387,6 +387,8 @@ export default function Play() {
   const [resumingPending, setResumingPending] = useState(null) // { action, actionId } or null
   /** True only while re-streaming after user taps "Tiếp tục" on the recovery banner. */
   const [recoveryMode, setRecoveryMode] = useState(false)
+  /** Rank advance notification: { from, to, trigger, reason, narrative } */
+  const [rankAdvanceNotif, setRankAdvanceNotif] = useState(null)
   const recoveringFromBannerRef = useRef(false)
   /** Prevents CONTINUE from racing with history fetch. */
   const historyLoadedRef = useRef(false)
@@ -413,6 +415,22 @@ export default function Play() {
   const bottomRef = useRef(null)
   const userScrolledUp = useRef(false)
   const scrollRafRef = useRef(null)
+
+  // ---- Streaming handler ----
+  // Backend delivers chunks according to streamDeliverySpeed setting (instant / typewriter, etc).
+  // We append them directly to the last assistant message — no client-side animation needed.
+  const _appendChunk = useCallback((chunk) => {
+    setMessages((prev) => {
+      const msgs = [...prev]
+      const last = msgs[msgs.length - 1]
+      if (last?.role === 'assistant') {
+        msgs[msgs.length - 1] = { ...last, content: last.content + chunk }
+      } else {
+        msgs.push({ role: 'assistant', content: chunk })
+      }
+      return msgs
+    })
+  }, [])
 
   // =========================================================
   // CAMPAIGN LOAD — runs once on mount / campaignId change
@@ -693,6 +711,9 @@ export default function Play() {
       streamAction({
         campaignId,
         scenarioTone: activeScenarioRef.current?.tone_instructions ?? '',
+        protagonistName: activeScenarioRef.current?.protagonist_name ?? '',
+        narrativePov: activeScenarioRef.current?.narrative_pov ?? 'first_person',
+        writingStyle: activeScenarioRef.current?.writing_style ?? 'chinh_thong',
         language: activeScenarioRef.current?.language ?? 'en',
         action,
         openingNarrative: activeScenarioRef.current?.opening_narrative ?? '',
@@ -700,22 +721,8 @@ export default function Play() {
         provider: llmProvider,
         model: llmModel,
         temperature,
-        onChunk: (chunk) => {
-          flushSync(() => {
-            setMessages((prev) => {
-              const msgs = [...prev]
-              const last = msgs[msgs.length - 1]
-              if (last && last.role === 'assistant') {
-                msgs[msgs.length - 1] = { ...last, content: last.content + chunk }
-              } else {
-                msgs.push({ role: 'assistant', content: chunk })
-              }
-              return msgs
-            })
-          })
-          // Persist after each chunk (outside flushSync to avoid blocking render)
-          setTimeout(() => { if (persistRef.current) persistRef.current() }, 0)
-        },
+        streamDeliverySpeed,
+        onChunk: _appendChunk,
         onJournal: (entry) => {
           addJournalEntryLocal(entry)
         },
@@ -732,6 +739,10 @@ export default function Play() {
           const formatted = formatAutoPlotMessage(plot)
           flushSync(() => setMessages((prev) => [...prev, { role: 'assistant', content: formatted }]))
           setTimeout(() => { if (persistRef.current) persistRef.current() }, 0)
+        },
+        onRankAdvance: (result) => {
+          setRankAdvanceNotif(result)
+          setTimeout(() => setRankAdvanceNotif(null), 8000)
         },
         onTruncateClean: (cleanText) => {
           flushSync(() => {
@@ -762,7 +773,6 @@ export default function Play() {
           }
         },
         onError: () => {
-          // Keep banner so user can retry (don't clear resumingPending).
           setStreaming(false)
           mergeCampaignPatch(campaignId, { pendingActionId: null })
           useGameStore.getState().clearPendingActionId()
@@ -1110,6 +1120,41 @@ export default function Play() {
         isRecovering={!!resumingPending}
         playerTurnCount={Math.max(0, displayChapters.length - 1)}
       />
+
+      {/* ===== RANK ADVANCE NOTIFICATION ===== */}
+      {rankAdvanceNotif && (
+        <div className="flex items-start gap-3 px-4 py-3 bg-[rgba(251,191,36,0.06)] border-b border-[rgba(251,191,36,0.15)] animate-[slideDown_0.3s_ease-out]">
+          <div className="flex-shrink-0 w-8 h-8 rounded-full bg-[rgba(251,191,36,0.12)] border border-[rgba(251,191,36,0.2)] flex items-center justify-center mt-0.5">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--warning)]">
+              <polyline points="18 15 12 9 6 15" />
+            </svg>
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-[11px] font-bold uppercase tracking-widest text-[var(--warning)]">
+                ⬆ {t ? t('rank.advance') : 'Đột Phá'}
+              </span>
+              <span className="text-[10px] text-[var(--text-tertiary)] font-mono">
+                {rankAdvanceNotif.trigger}
+              </span>
+            </div>
+            <div className="text-xs text-[var(--text-secondary)] leading-relaxed">
+              <span className="text-[var(--text-tertiary)] line-through mr-1">{rankAdvanceNotif.from_entity || rankAdvanceNotif.from}</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="inline text-[var(--warning)] mx-1"><polyline points="9 18 15 12 9 6"/></svg>
+              <span className="font-semibold text-[var(--warning)]">{rankAdvanceNotif.to_entity || rankAdvanceNotif.to}</span>
+            </div>
+            {rankAdvanceNotif.reason && (
+              <p className="text-[11px] text-[var(--text-tertiary)] mt-1 italic">{rankAdvanceNotif.reason}</p>
+            )}
+          </div>
+          <button
+            onClick={() => setRankAdvanceNotif(null)}
+            className="flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] hover:bg-[var(--accent-muted)] transition-all"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      )}
 
       {/* ===== MAIN: Narrative area ===== */}
       <div className="flex flex-1 overflow-hidden">

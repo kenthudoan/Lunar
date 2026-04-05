@@ -4,6 +4,200 @@
 
 import { create } from 'zustand'
 
+// ---------------------------------------------------------------------------
+// Sub-stage presets (shared by PowerSystemEditor and RankListView)
+// ---------------------------------------------------------------------------
+
+export const VI_SUBS = [
+  { key: 'so_ky',    name: 'Sơ Kỳ' },
+  { key: 'trung_ky', name: 'Trung Kỳ' },
+  { key: 'hau_ky',   name: 'Hậu Kỳ' },
+]
+export const EN_SUBS = [
+  { key: 'early', name: 'Early' },
+  { key: 'mid',   name: 'Mid' },
+  { key: 'late',  name: 'Late' },
+]
+export const PT_SUBS = [
+  { key: 'iniciante',     name: 'Iniciante' },
+  { key: 'intermediario', name: 'Intermediário' },
+  { key: 'avancado',      name: 'Avançado' },
+]
+
+export function getSubStages(locale) {
+  if (locale === 'vi') return VI_SUBS
+  if (locale === 'pt-br') return PT_SUBS
+  return EN_SUBS
+}
+
+// ---------------------------------------------------------------------------
+// Entity display name maps — resolve internal keys to human-readable names
+// Used across ScenarioBuilder, WorldMap, LoreExpander, NPC Inspector
+// ---------------------------------------------------------------------------
+
+export const SUB_TIER_MAP = {
+  so_ky: 'Sơ Kỳ', trung_ky: 'Trung Kỳ', hau_ky: 'Hậu Kỳ',
+  early: 'Sơ Kỳ', mid: 'Trung Kỳ', late: 'Hậu Kỳ',
+  tier_1: 'Tier 1', tier_2: 'Tier 2', tier_3: 'Tier 3',
+}
+
+export const LOCATION_TYPE_MAP = {
+  city: 'Thành Thị', town: 'Thị Trấn', village: 'Làng', forest: 'Rừng',
+  mountain: 'Núi', river: 'Sông', cave: 'Hang Động', lake: 'Hồ',
+  temple: 'Đền', castle: 'Thành Trì', tavern: 'Quán Rượu',
+  ruins: 'Tàn Tích', battlefield: 'Chiến Trường',
+  // LLM / lore often emits Vietnamese slugs instead of English enum keys
+  nui: 'Núi', núi: 'Núi', non_nui: 'Núi', son_lam: 'Sơn Lâm',
+  thanh_thi: 'Thành Thị', thi_tran: 'Thị Trấn', lang_que: 'Làng',
+  rung: 'Rừng', song: 'Sông', hang_dong: 'Hang Động',
+  den_chua: 'Đền', quan_tuu: 'Quán Rượu', tan_tich: 'Tàn Tích',
+}
+
+export const FACTION_TYPE_MAP = {
+  sect: 'Môn Phái', guild: 'Hội', order: 'Giáo Đoàn',
+  kingdom: 'Vương Quốc', empire: 'Đế Chế', clan: 'Gia Tộc',
+  faction: 'Phe Phái', alliance: 'Liên Minh', syndicate: 'Tổ Chức',
+  mon_phai: 'Môn Phái', môn_phai: 'Môn Phái',
+  hoi: 'Hội', giao_doan: 'Giáo Đoàn', vuong_quoc: 'Vương Quốc',
+  de_che: 'Đế Chế', gia_toc: 'Gia Tộc', phe_phai: 'Phe Phái',
+  lien_minh: 'Liên Minh', to_chuc: 'Tổ Chức',
+}
+
+export const ITEM_TYPE_MAP = {
+  weapon: 'Vũ Khí', armor: 'Giáp', potion: 'Dược Phẩm',
+  scroll: 'Thần Chú', artifact: 'Thần Khí', ring: 'Nhẫn',
+  amulet: 'Bùa', material: 'Tài Liệu', material2: 'Nguyên Liệu',
+  book: 'Sách', key: 'Chìa Khóa', treasure: 'Bảo Vật',
+  vu_khi: 'Vũ Khí', vũ_khí: 'Vũ Khí', giap: 'Giáp',
+  duoc_pham: 'Dược Phẩm', than_chu: 'Thần Chú', than_khi: 'Thần Khí',
+  nhan: 'Nhẫn', bua: 'Bùa', nguyen_lieu: 'Nguyên Liệu',
+  sach: 'Sách', chia_khoa: 'Chìa Khóa', bao_vat: 'Bảo Vật',
+}
+
+export const ITEM_RARITY_MAP = {
+  common: 'Phổ Thông', uncommon: 'Hiếm', rare: 'Cực Hiếm',
+  epic: 'Cực Phẩm', legendary: 'Truyền Thuyết', mythic: 'Thần Thoại',
+}
+
+export const NPC_ROLE_MAP = {
+  leader: 'Lãnh Đạo', elder: 'Trưởng Lão', disciple: 'Đệ Tử',
+  merchant: 'Thương Nhân', guard: 'Vệ Binh', spy: 'Gián Điệp',
+  scholar: 'Học Giả', healer: 'Trị Liện Sư', assassin: 'Sát Thủ',
+  noble: 'Quý Tộc', servant: 'Tì Nhân', traveler: 'Lữ Khách',
+  rival: 'Địch Thủ', master: 'Sư Phụ', apprentice: 'Đồ Đệ',
+}
+
+export const ENTITY_ALIGNMENT_MAP = {
+  lawful_good: 'Thiện Chính', neutral_good: 'Thiện Trung Lập',
+  chaotic_good: 'Thiện Hỗn Loạn', lawful_neutral: 'Trung Lập Chính',
+  true_neutral: 'Trung Lập', chaotic_neutral: 'Hỗn Loạn Trung Lập',
+  lawful_evil: 'Ác Chính', neutral_evil: 'Ác Trung Lập',
+  chaotic_evil: 'Ác Hỗn Loạn',
+}
+
+/** Cultivation / custom realm slugs (ASCII) → readable Vietnamese */
+export const REALM_SLUG_MAP_VI = {
+  luyen_khi: 'Luyện Khí', luyen_khi_ky: 'Luyện Khí Kỳ',
+  hap_khi: 'Hấp Khí', hap_khi_ky: 'Hấp Khí Kỳ',
+  truc_co: 'Trúc Cơ', truc_co_ky: 'Trúc Cơ Kỳ',
+  kim_dan: 'Kim Đan', kim_dan_ky: 'Kim Đan Kỳ',
+  nguyen_than: 'Nguyên Thần', nguyen_than_ky: 'Nguyên Thần Kỳ',
+  thai_at: 'Thái Ất', thai_at_ky: 'Thái Ất Kỳ',
+  dai_thua: 'Đại Thừa', dai_thua_ky: 'Đại Thừa Kỳ',
+  chan_tien: 'Chân Tiên', chan_tien_ky: 'Chân Tiên Kỳ',
+  dai_la: 'Đại La', dai_la_ky: 'Đại La Kỳ',
+  tien_nhan: 'Tiên Nhân', tien_nhan_ky: 'Tiên Nhân Kỳ',
+  tu_chan: 'Tu Chân', tu_tien: 'Tu Tiên', ma_dao: 'Ma Đạo',
+  vo_than: 'Võ Thần', vo_su: 'Võ Sư', vo_gia: 'Võ Giả',
+}
+
+/** Same slugs → English (for locale === 'en') */
+export const REALM_SLUG_MAP_EN = {
+  luyen_khi: 'Qi Refining', luyen_khi_ky: 'Qi Refining Stage',
+  hap_khi: 'Qi Gathering', hap_khi_ky: 'Qi Gathering Stage',
+  truc_co: 'Foundation', truc_co_ky: 'Foundation Stage',
+  kim_dan: 'Golden Core', kim_dan_ky: 'Golden Core Stage',
+  nguyen_than: 'Nascent Soul', nguyen_than_ky: 'Nascent Soul Stage',
+  thai_at: 'Soul Transformation', thai_at_ky: 'Soul Transformation Stage',
+  dai_thua: 'Mahayana', dai_thua_ky: 'Mahayana Stage',
+  chan_tien: 'True Immortal', chan_tien_ky: 'True Immortal Stage',
+  dai_la: 'Great Luo', dai_la_ky: 'Great Luo Stage',
+  tien_nhan: 'Immortal', tien_nhan_ky: 'Immortal Stage',
+  tu_chan: 'Cultivation', tu_tien: 'Immortal Cultivation', ma_dao: 'Demonic Path',
+  vo_than: 'Martial God', vo_su: 'Martial Master', vo_gia: 'Martial Artist',
+}
+
+function normalizeSlug(value) {
+  return String(value).trim().toLowerCase().replace(/\s+/g, '_')
+}
+
+// ---------------------------------------------------------------------------
+// Entity attribute value resolver
+// Looks up internal keys in the above maps and returns human-readable names.
+// Falls back to the original value if no mapping exists.
+// Optional locale: 'vi' | 'en' — when omitted, uses lunar_language from localStorage or 'vi'.
+// ---------------------------------------------------------------------------
+
+export function resolveEntityValue(key, value, locale) {
+  if (value === null || value === undefined) return value
+  const loc =
+    locale ||
+    (typeof localStorage !== 'undefined' && localStorage.getItem('lunar_language')) ||
+    'vi'
+  const isEn = loc === 'en'
+
+  if (typeof value === 'number' && key === 'sub_tier') {
+    const idx = Number(value)
+    if (idx >= 1 && idx <= 3) {
+      const labels = isEn ? ['', 'Early', 'Mid', 'Late'] : ['', 'Sơ Kỳ', 'Trung Kỳ', 'Hậu Kỳ']
+      return labels[idx] || String(value)
+    }
+  }
+
+  if (typeof value !== 'string') return value
+  const raw = String(value).trim()
+  const norm = normalizeSlug(raw)
+
+  if (key === 'sub_tier' || key === 'tier') {
+    const sub = SUB_TIER_MAP[raw] || SUB_TIER_MAP[norm]
+    if (sub) return sub
+    if (key === 'sub_tier' && /^[123]$/.test(raw)) {
+      return isEn ? ['Early', 'Mid', 'Late'][Number(raw) - 1] : ['Sơ Kỳ', 'Trung Kỳ', 'Hậu Kỳ'][Number(raw) - 1]
+    }
+    return value
+  }
+
+  if (key === 'location_type') {
+    return LOCATION_TYPE_MAP[raw] || LOCATION_TYPE_MAP[norm] || value
+  }
+  if (key === 'faction_type') {
+    return FACTION_TYPE_MAP[raw] || FACTION_TYPE_MAP[norm] || value
+  }
+  if (key === 'item_type') {
+    return ITEM_TYPE_MAP[raw] || ITEM_TYPE_MAP[norm] || value
+  }
+  if (key === 'rarity') {
+    return ITEM_RARITY_MAP[raw] || ITEM_RARITY_MAP[norm] || value
+  }
+  if (key === 'role') {
+    return NPC_ROLE_MAP[raw] || NPC_ROLE_MAP[norm] || value
+  }
+  if (key === 'alignment') {
+    return ENTITY_ALIGNMENT_MAP[raw] || ENTITY_ALIGNMENT_MAP[norm] || value
+  }
+
+  if (key === 'realm') {
+    const rm = isEn ? REALM_SLUG_MAP_EN : REALM_SLUG_MAP_VI
+    return rm[raw] || rm[norm] || value
+  }
+
+  return value
+}
+
+// ---------------------------------------------------------------------------
+// Translation store
+// ---------------------------------------------------------------------------
+
 const translations = {
   // ---- Vietnamese (default) ----
   vi: {
@@ -38,6 +232,33 @@ const translations = {
     'scenario.import': 'Nhập Từ File',
     'scenario.imported': 'Đã tải dữ liệu',
     'scenario.submitImport': 'Thực Thi Nhập',
+    'scenario.aiExpand': 'AI mở rộng',
+    'scenario.analyzing': 'Đang phân tích...',
+    'scenario.adventureName': 'Tên Cuộc Phiêu Lưu',
+    'scenario.adventureNameHint': 'Đặt tên cho phiêu lưu này. Bạn có thể có nhiều phiêu lưu trong cùng thế giới.',
+
+    // Entity types
+    'entity.rank': 'Cấp Bậc',
+    'entity.faction': 'Thế Lực',
+    'entity.secret': 'Bí Ẩn',
+    'entity.location': 'Địa Điểm',
+    'entity.npc': 'Nhân Vật',
+    'entity.item': 'Vật Phẩm',
+    'entity.name': 'Tên',
+    'entity.description': 'Mô Tả',
+    'entity.parent': 'Cấp Trên',
+    'entity.leader': 'Người Lãnh Đạo',
+    'entity.alignment': 'Xu Hướng',
+    'entity.influence': 'Ảnh Hưởng',
+    'entity.revealedTo': 'Biết Bí Mật',
+    'entity.role': 'Vai Trò',
+    'entity.powerLevel': 'Cấp Sức Mạnh',
+    'entity.realm': 'Cảnh Giới',
+    'entity.subTiers': 'Tiểu Cấp',
+    'entity.subTier': 'Tiểu Cấp',
+    'entity.tier': 'Trình Độ',
+    'entity.rarity': 'Độ Hiếm',
+    'entity.owner': 'Chủ Sở Hữu',
 
     // Game Canvas
     'canvas.unknownWorld': 'Tọa độ không xác định',
@@ -101,6 +322,16 @@ const translations = {
     'journal.older': 'Trước Đó',
     'journal.showMore': 'Hiển thị thêm {n} mục',
     'journal.collapse': 'Thu gọn',
+
+    // Progression & Tribulation
+    'tribulation.arrived': 'Thiên Kiếp Giáng Lâm',
+    'tribulation.success': 'Đột phá thành công!',
+    'tribulation.failed': 'Thiên kiếp thất bại',
+    'tribulation.roll': 'Roll',
+    'progression.pill': 'Ăn đan dược',
+    'progression.insight': 'Ngộ đạo',
+    'progression.breakthrough': 'Đột phá',
+    'progression.advance': 'Tu lực tăng',
 
     // Memory
     'memory.empty': 'Chưa có tinh thể ký ức nào được hình thành.',
@@ -411,6 +642,33 @@ const translations = {
     'scenario.import': 'Import from File',
     'scenario.imported': 'Data loaded',
     'scenario.submitImport': 'Execute Import',
+    'scenario.aiExpand': 'AI Expand',
+    'scenario.analyzing': 'Analyzing...',
+    'scenario.adventureName': 'Adventure Name',
+    'scenario.adventureNameHint': 'Name this adventure. You can have multiple adventures in the same world.',
+
+    // Entity types
+    'entity.rank': 'Rank / Power Level',
+    'entity.faction': 'Faction',
+    'entity.secret': 'Secret',
+    'entity.location': 'Location',
+    'entity.npc': 'Character',
+    'entity.item': 'Item',
+    'entity.name': 'Name',
+    'entity.description': 'Description',
+    'entity.parent': 'Parent Level',
+    'entity.leader': 'Leader',
+    'entity.alignment': 'Alignment',
+    'entity.influence': 'Influence',
+    'entity.revealedTo': 'Known To',
+    'entity.role': 'Role',
+    'entity.powerLevel': 'Power Level',
+    'entity.realm': 'Realm',
+    'entity.subTiers': 'Sub-Tiers',
+    'entity.subTier': 'Sub-Tier',
+    'entity.tier': 'Tier',
+    'entity.rarity': 'Rarity',
+    'entity.owner': 'Owner',
 
     // Game Canvas
     'canvas.unknownWorld': 'Unknown Coordinates',
@@ -474,6 +732,16 @@ const translations = {
     'journal.older': 'Earlier',
     'journal.showMore': 'Show {n} more entries',
     'journal.collapse': 'Collapse',
+
+    // Progression & Tribulation
+    'tribulation.arrived': 'Heavenly Tribulation Descends',
+    'tribulation.success': 'Breakthrough successful!',
+    'tribulation.failed': 'Tribulation failed',
+    'tribulation.roll': 'Roll',
+    'progression.pill': 'Consumed a pill',
+    'progression.insight': 'Sudden enlightenment',
+    'progression.breakthrough': 'Breakthrough',
+    'progression.advance': 'Power increased',
 
     // Memory
     'memory.empty': 'No memory crystals formed yet.',

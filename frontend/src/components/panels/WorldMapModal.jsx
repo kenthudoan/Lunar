@@ -1,11 +1,61 @@
+/** Strip Vietnamese diacritics so slug matches backend _slugify normalization. */
+function _stripDiacritics(text) {
+  return String(text)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd').replace(/Đ/g, 'D')
+}
+
+/** Convert a display name to a backend-style slug. */
+function _toSlug(text) {
+  return _stripDiacritics(String(text)).toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')
+}
+
+/** Resolve a realm/tier slug value to a display name using the power system config.
+ *  Falls back to the hardcoded maps + original value if not found. */
+function _resolvePowerValue(key, value, powerSystem, locale) {
+  if (!value || !powerSystem || !powerSystem.axes) return null
+  const v = String(value).trim()
+  const norm = _toSlug(v)
+
+  if (key === 'realm') {
+    // Try: exact slug match, then axis_name slug match
+    for (const axis of powerSystem.axes) {
+      if (axis.axis_id === v || axis.axis_id === norm || _toSlug(axis.axis_id) === norm) {
+        return axis.axis_name
+      }
+      // Also try axis_name slugified
+      if (_toSlug(axis.axis_name) === norm) return axis.axis_name
+    }
+  }
+
+  if (key === 'tier') {
+    // Try: stage slug match in any axis
+    for (const axis of powerSystem.axes) {
+      for (const stage of axis.stages || []) {
+        if (stage.slug === v || stage.slug === norm || _toSlug(stage.slug || '') === norm || _toSlug(stage.name || '') === norm) {
+          const name = stage.name || v
+          // If sub-tier context is needed, could include sub_stage here
+          return name
+        }
+      }
+    }
+  }
+
+  return null  // let caller use hardcoded maps + fallback
+}
+
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
 import Modal from '../UI/Modal'
 import { useI18n } from '../../i18n'
+import { resolveEntityValue } from '../../i18n/index'
 
 const ATTRIBUTE_LABELS = (t) => ({
   description: t('map.attr.description'),
   power_level: t('map.attr.power_level'),
+  realm: t('entity.realm'),
+  tier: t('entity.tier'),
+  sub_tier: t('entity.subTier'),
   location_type: t('map.attr.location_type'),
   faction_type: t('map.attr.faction_type'),
   item_type: t('map.attr.item_type'),
@@ -70,6 +120,13 @@ function isMultilineAttribute(key, val) {
   return MULTILINE_ATTR_KEYS.has(key) || s.includes('\n') || s.length > 72
 }
 
+/** Resolve an attribute value — try power system config first, then hardcoded maps. */
+function resolvedAttrValue(key, val, powerSystem, loc) {
+  const fromPs = _resolvePowerValue(key, val, powerSystem, loc)
+  if (fromPs) return fromPs
+  return resolveEntityValue(key, String(val), loc)
+}
+
 /** Canvas 2D: draw label centered at x, word-wrapped to reduce overlap. */
 function fillTextWrappedCenter(ctx, text, x, yTop, maxWidth, lineHeight) {
   const words = String(text).split(/\s+/).filter(Boolean)
@@ -93,7 +150,7 @@ function fillTextWrappedCenter(ctx, text, x, yTop, maxWidth, lineHeight) {
 }
 
 export default function WorldMapModal({ open, onClose, campaignId }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const labels = ATTRIBUTE_LABELS(t)
   const [graphData, setGraphData] = useState({ nodes: [], links: [] })
   const [loading, setLoading] = useState(false)
@@ -104,6 +161,7 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [searchHighlightSet, setSearchHighlightSet] = useState(null)
+  const [powerSystem, setPowerSystem] = useState(null)
   const graphRef = useRef()
   const containerRef = useRef()
 
@@ -111,11 +169,16 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
     if (!campaignId) return
     setLoading(true)
     try {
-      const { fetchWorldGraph, searchWorldGraph } = await import('../../api')
-      const data = await fetchWorldGraph(campaignId)
-      setGraphData(data)
+      const { fetchWorldGraph, searchWorldGraph, fetchCampaignPowerSystem } = await import('../../api')
+      const [graphDataResult, psResult] = await Promise.allSettled([
+        fetchWorldGraph(campaignId),
+        fetchCampaignPowerSystem(campaignId),
+      ])
+      setGraphData(graphDataResult.status === 'fulfilled' ? graphDataResult.value : { nodes: [], links: [] })
+      setPowerSystem(psResult.status === 'fulfilled' ? psResult.value : null)
     } catch {
       setGraphData({ nodes: [], links: [] })
+      setPowerSystem(null)
     } finally {
       setLoading(false)
     }
@@ -312,7 +375,7 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
                               {label}
                             </dt>
                             <dd className="text-xs text-[var(--text-secondary)] break-words whitespace-pre-wrap leading-snug">
-                              {String(val)}
+                              {resolvedAttrValue(key, String(val), powerSystem, locale)}
                             </dd>
                           </div>
                         )
@@ -323,7 +386,7 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
                           className="flex items-baseline justify-between gap-3 text-xs leading-tight py-1 border-t border-[var(--border-subtle)] first:border-t-0 first:pt-0 pt-1"
                         >
                           <dt className="text-[var(--text-tertiary)] shrink-0">{label}</dt>
-                          <dd className="text-[var(--text-secondary)] text-right min-w-0 break-words">{String(val)}</dd>
+                          <dd className="text-[var(--text-secondary)] text-right min-w-0 break-words">{resolvedAttrValue(key, String(val), powerSystem, locale)}</dd>
                         </div>
                       )
                     })}

@@ -355,6 +355,7 @@
 - [x] **Combat Overlay** — visual indicator when in COMBAT mode (border glow + badge + narrator label change)
 - [x] **Plot Generator UI** — button to generate random events or NPC suggestions (NPC/Event/Plot Arc tabs)
 - [x] **Memory Crystal Inspector** — view current crystal chain + manual crystallize button
+- [x] **Multi-Axis Power System (Đô Thị)** — parallel rank axes (Tài Chính, Xã Hội, Quan Hệ, Ảnh Hưởng) with tab UI in PowerSystemEditor + multi power bars in NPC Inspector + axis-aware combat resolution (CombatEngine picks correct axis per action type: combat→Tu Lực, social→Địa Vị, wealth→Tài Chính)
 
 ---
 

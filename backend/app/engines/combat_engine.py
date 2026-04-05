@@ -81,6 +81,10 @@ class CombatEngine:
         npc_name: str,
         npc_power: int,
         language: str = "en",
+        npc_realm: str = "",
+        npc_tier: str = "",
+        npc_sub_tier: int = 2,
+        action_type_hint: str = "",
     ) -> ActionEvaluation:
         if language in ("pt", "pt-br"):
             system = (
@@ -110,13 +114,41 @@ class CombatEngine:
             },
         }
         up = _user_prompts.get(language, {"action_label": "Action", "opponent_label": "Opponent", "power_label": "power"})
+        power_desc = f"{up['power_label']} {npc_power}/10"
+        if npc_realm:
+            _sub_labels = {1: "Sơ Kỳ", 2: "Trung Kỳ", 3: "Hậu Kỳ"}
+            sub_label = _sub_labels.get(max(1, min(3, npc_sub_tier)), "")
+            tier_display = f"{npc_tier} {sub_label}".strip() if npc_tier else sub_label
+            if tier_display:
+                power_desc = f"{tier_display} ({npc_realm}) — {power_desc}"
+            else:
+                power_desc = f"{npc_realm} — {power_desc}"
+        # Build axis context for the prompt
+        axis_hint = ""
+        if action_type_hint:
+            axis_labels = {
+                "physical": "physical combat power (martial strength)",
+                "combat": "combat power (martial strength)",
+                "social": "social influence and status",
+                "manipulate": "social manipulation and influence",
+                "persuade": "persuasion and social influence",
+                "bribe": "financial leverage and wealth",
+                "buy": "financial resources and purchasing power",
+                "investigate": "investigative and analytical ability",
+                "deduce": "deductive reasoning and investigation",
+            }
+            ax_lbl = axis_labels.get(action_type_hint.lower(), "")
+            if ax_lbl:
+                axis_hint = f"\nThe opponent's relevant power is their {ax_lbl}."
+
         messages = [
             {"role": "system", "content": system},
             {
                 "role": "user",
                 "content": (
                     f"{up['action_label']}: {action}\n"
-                    f"{up['opponent_label']}: {npc_name} ({up['power_label']} {npc_power}/10)"
+                    f"{up['opponent_label']}: {npc_name} ({power_desc})"
+                    f"{axis_hint}"
                 ),
             },
         ]
@@ -168,3 +200,98 @@ class CombatEngine:
         if roll < success_prob:
             return CombatOutcome.SUCCESS
         return CombatOutcome.FAIL
+
+    def roll_outcome_with_realm(
+        self,
+        action_quality: float,
+        npc_realm: str,
+        npc_tier: str,
+        power_resolver,
+        npc_sub_tier: int = 2,
+    ) -> CombatOutcome:
+        """
+        Roll combat outcome using realm+tier-based difficulty.
+        Uses PowerSystemResolver to compute a comparable power score.
+        """
+        score = power_resolver.resolve_power_score(npc_realm, npc_tier, sub_tier=npc_sub_tier, power_level=5)
+        npc_power = int(round(score))
+        npc_power = max(1, min(10, npc_power))
+        return self.roll_outcome(action_quality, npc_power)
+
+    # ---------------------------------------------------------------------------
+    # Multi-axis combat
+    # ---------------------------------------------------------------------------
+
+    ACTION_TYPE_TO_AXIS: dict[str, list[str]] = {
+        # Action type → preferred axes (first match wins)
+        "physical":     ["tu_luc", "vo_dao", "combat", "primary"],
+        "combat":       ["tu_luc", "vo_dao", "combat", "primary"],
+        "social":       ["social_rank", "influence", "primary"],
+        "manipulate":   ["influence", "social_rank", "connections", "primary"],
+        "persuade":     ["influence", "social_rank", "connections", "primary"],
+        "bribe":        ["wealth", "influence"],
+        "buy":          ["wealth"],
+        "trade":        ["wealth"],
+        "investigate":  ["investigation", "forensics"],
+        "deduce":       ["investigation", "intelligence"],
+        "default":      ["primary"],
+    }
+
+    async def evaluate_multi_axis_action(
+        self,
+        action: str,
+        npc_name: str,
+        npc_progression: dict,       # {axis_id: {raw_value: N, ...}, ...}
+        power_system,                 # PowerSystemResolver instance
+        action_type_hint: str = "default",  # "combat", "social", "wealth", etc.
+        language: str = "en",
+    ) -> tuple[ActionEvaluation, CombatOutcome]:
+        """
+        Evaluate an action using multi-axis power resolution.
+
+        action_type_hint tells the system which axis to use:
+          - "combat"/"physical" → primary combat axis
+          - "social"/"manipulate" → social rank / influence axis
+          - "wealth"/"buy"        → wealth axis
+          - "investigate"/"deduce" → investigation axis
+          - "default"             → primary axis
+
+        Returns (ActionEvaluation, CombatOutcome).
+        """
+        # Map action type hint → target axis id
+        preferred_ids = self.ACTION_TYPE_TO_AXIS.get(
+            action_type_hint.lower(), self.ACTION_TYPE_TO_AXIS["default"]
+        )
+
+        # Resolve NPC power from the appropriate axis
+        npc_power = 5
+        axis_name_for_prompt = "power"
+        config = power_system.config if power_system else None
+
+        if config and config.axes:
+            npc_power = 5  # default
+            for pid in preferred_ids:
+                if pid == "primary":
+                    primary = next((ax for ax in config.axes if ax.is_primary), config.axes[0])
+                    pid = primary.axis_id
+                    axis_name_for_prompt = primary.axis_name
+                    break
+                if pid in npc_progression:
+                    prog = npc_progression[pid]
+                    raw = prog.get("raw_value", 0) if isinstance(prog, dict) else 0
+                    norm = power_system.progression_engine.raw_to_normalized(pid, raw)
+                    npc_power = max(1, min(10, int(round(norm * 10))))
+                    axis_name_for_prompt = next((ax.axis_name for ax in config.axes if ax.axis_id == pid), pid)
+                    break
+
+        evaluation = await self.evaluate_action(
+            action=action,
+            npc_name=npc_name,
+            npc_power=npc_power,
+            language=language,
+            npc_realm="",    # not used in multi-axis
+            npc_tier="",
+            npc_sub_tier=2,
+        )
+        outcome = self.roll_outcome(evaluation.final_quality, npc_power)
+        return evaluation, outcome

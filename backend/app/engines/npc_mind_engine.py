@@ -19,6 +19,10 @@ class NpcMind:
     campaign_id: str
     thoughts: dict[str, NpcThought] = field(default_factory=dict)
     aliases: list[str] = field(default_factory=list)
+    realm: str = ""     # e.g. "tu_chan" (legacy single-axis)
+    tier: str = ""     # e.g. "truc_co" (legacy single-axis)
+    # Multi-axis progression: {axis_id: {"stage_name": str, "stage_slug": str, "raw_value": int, "sub_stage_slug": str|null}}
+    progression: dict[str, dict] = field(default_factory=dict)
 
     def set_thought(self, key: str, value: str):
         self.thoughts[key] = NpcThought(key=key, value=value)
@@ -32,11 +36,38 @@ class NpcMind:
             "name": self.name,
             "campaign_id": self.campaign_id,
             "aliases": self.aliases,
+            "realm": self.realm,
+            "tier": self.tier,
+            "progression": self.progression,
             "thoughts": {
                 k: {"value": t.value, "updated_at": t.updated_at}
                 for k, t in self.thoughts.items()
             },
         }
+
+    @staticmethod
+    def from_dict(d: dict) -> NpcMind:
+        thoughts = {}
+        for k, v in d.get("thoughts", {}).items():
+            thoughts[k] = NpcThought(key=k, value=v.get("value", ""), updated_at=v.get("updated_at", ""))
+        mind = NpcMind(
+            name=d.get("name", ""),
+            campaign_id=d.get("campaign_id", ""),
+            aliases=d.get("aliases", []),
+            realm=d.get("realm", ""),
+            tier=d.get("tier", ""),
+            progression=d.get("progression", {}),
+            thoughts=thoughts,
+        )
+        return mind
+
+    def set_progression(self, progression: dict[str, dict]):
+        """Update the multi-axis progression."""
+        self.progression = progression
+
+    def get_progression(self) -> dict[str, dict]:
+        """Return the multi-axis progression dict."""
+        return self.progression
 
 
 class NpcMindEngine:
@@ -49,6 +80,51 @@ class NpcMindEngine:
 
     def get_all_minds(self, campaign_id: str) -> list[NpcMind]:
         return list(self._minds.get(campaign_id, {}).values())
+
+    def get_npc_progression(self, campaign_id: str, npc_name: str) -> dict | None:
+        """Return multi-axis progression for an NPC, or None."""
+        mind = self.get_mind(campaign_id, npc_name)
+        return mind.progression if mind else None
+
+    def set_npc_progression(self, campaign_id: str, npc_name: str, progression: dict[str, dict]) -> None:
+        """Update multi-axis progression for an NPC."""
+        mind = self.get_mind(campaign_id, npc_name)
+        if mind:
+            mind.set_progression(progression)
+
+    async def set_npc_realm_tier(
+        self,
+        campaign_id: str,
+        npc_name: str,
+        realm: str,
+        tier: str,
+        sub_tier: int = 0,
+        axis_id: str | None = None,
+        stage_slug: str | None = None,
+        stage_name: str | None = None,
+        sub_stage_slug: str | None = None,
+    ) -> None:
+        """Update the realm/tier (legacy) and multi-axis progression.
+
+        Args:
+            realm: display name of the axis (e.g. "Tu Lực")
+            tier: display name of the current stage (e.g. "Trúc Cơ")
+            axis_id: internal axis key (e.g. "tu_luc") — used as progression key
+            stage_slug: internal stage slug (e.g. "truc_co") — for lookups
+            stage_name: display name of the stage (e.g. "Trúc Cơ Sơ Kỳ") — shown in UI
+            sub_stage_slug: internal sub-stage slug (e.g. "so_ky")
+        """
+        mind = self._ensure_mind(campaign_id, npc_name)
+        mind.realm = realm
+        mind.tier = tier
+        prog_key = axis_id if axis_id else (realm or "primary")
+        display_name = stage_name if stage_name else tier
+        mind.progression[prog_key] = {
+            "stage_name": display_name,
+            "stage_slug": stage_slug,
+            "raw_value": sub_tier * 100,
+            "sub_stage_slug": sub_stage_slug,
+        }
 
     def _find_alias_match(self, campaign_id: str, name: str) -> NpcMind | None:
         """Check if name is already a known alias of an existing NPC."""

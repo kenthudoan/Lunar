@@ -14,6 +14,22 @@ function authHeader(extra = {}) {
   return { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extra }
 }
 
+// Intercept fetch to detect expired/invalid tokens and redirect to login cleanly.
+const _origFetch = window.fetch
+window.fetch = async (...args) => {
+  const r = await _origFetch(...args)
+  if (r.status === 401 && typeof window !== 'undefined') {
+    const url = args[0] && typeof args[0] === 'object' ? args[0].url : args[0]
+    const isLoginPage = window.location.pathname === '/login'
+    const isAuthEndpoint = url && String(url).includes('/auth/')
+    if (!isLoginPage && !isAuthEndpoint) {
+      localStorage.removeItem('lunar_token')
+      window.location.href = '/login'
+    }
+  }
+  return r
+}
+
 // ---- Auth API ----
 export async function login(email, password) {
   const r = await fetch(`${BASE}/auth/login`, {
@@ -110,10 +126,61 @@ export async function checkNeo4j() {
   }
 }
 
+// ---- Power Systems (multi-axis) ----
+export async function fetchPowerSystems() {
+  const r = await fetch(`${BASE}/scenarios/power-systems`, { headers: authHeader() })
+  if (!r.ok) throw new Error('Failed to fetch power systems')
+  return r.json()
+}
+
+export async function fetchPowerSystemPresets() {
+  const r = await fetch(`${BASE}/scenarios/power-system/presets`, { headers: authHeader() })
+  if (!r.ok) throw new Error('Failed to fetch presets')
+  return r.json()
+}
+
+export async function fetchPowerSystemPresetInfo(presetKey) {
+  const r = await fetch(`${BASE}/scenarios/power-system/presets/${presetKey}`, { headers: authHeader() })
+  if (!r.ok) throw new Error('Failed to fetch preset info')
+  return r.json()
+}
+
+export async function generatePowerSystem({ loreText, language }) {
+  const r = await fetch(`${BASE}/scenarios/power-system/generate`, {
+    method: 'POST',
+    headers: authHeader({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ lore_text: loreText, language }),
+  })
+  if (!r.ok) throw new Error('Failed to generate power system')
+  return r.json()
+}
+
+export async function savePowerSystemConfig(scenarioId, { powerSystemName, axes }) {
+  const r = await fetch(`${BASE}/scenarios/${scenarioId}/power-system/save`, {
+    method: 'POST',
+    headers: authHeader({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ power_system_name: powerSystemName, axes }),
+  })
+  if (!r.ok) throw new Error('Failed to save power system')
+  return r.json()
+}
+
+export async function getScenarioPowerSystem(scenarioId) {
+  const r = await fetch(`${BASE}/scenarios/${scenarioId}/power-system`, { headers: authHeader() })
+  if (!r.ok) return null
+  return r.json()
+}
+
 // ---- Scenarios ----
 export async function fetchScenarios() {
   const r = await fetch(`${BASE}/scenarios/`, { headers: authHeader() })
   if (!r.ok) throw new Error('Failed to fetch scenarios')
+  return r.json()
+}
+
+export async function getScenario(scenarioId) {
+  const r = await fetch(`${BASE}/scenarios/${scenarioId}`, { headers: authHeader() })
+  if (!r.ok) throw new Error('Failed to fetch scenario')
   return r.json()
 }
 
@@ -127,8 +194,28 @@ export async function createScenario(data) {
   return r.json()
 }
 
+export async function updateScenario(scenarioId, data) {
+  const r = await fetch(`${BASE}/scenarios/${scenarioId}`, {
+    method: 'PUT',
+    headers: authHeader({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  })
+  if (!r.ok) throw new Error('Failed to update scenario')
+  return r.json()
+}
+
+export async function expandScenario(data) {
+  const r = await fetch(`${BASE}/scenarios/expand`, {
+    method: 'POST',
+    headers: authHeader({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  })
+  if (!r.ok) throw new Error('Failed to expand scenario')
+  return r.json()
+}
+
 export async function getStoryCards(scenarioId) {
-  const r = await fetch(`${BASE}/scenarios/${scenarioId}/story-cards`)
+  const r = await fetch(`${BASE}/scenarios/${scenarioId}/story-cards`, { headers: authHeader() })
   if (!r.ok) throw new Error('Failed to fetch story cards')
   return r.json()
 }
@@ -140,6 +227,16 @@ export async function addStoryCard(scenarioId, data) {
     body: JSON.stringify(data),
   })
   if (!r.ok) throw new Error('Failed to add story card')
+  return r.json()
+}
+
+export async function updateStoryCard(scenarioId, cardId, data) {
+  const r = await fetch(`${BASE}/scenarios/${scenarioId}/story-cards/${cardId}`, {
+    method: 'PUT',
+    headers: authHeader({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(data),
+  })
+  if (!r.ok) throw new Error('Failed to update story card')
   return r.json()
 }
 
@@ -230,10 +327,12 @@ export async function fetchCharacters(campaignId, query = '') {
 
 export function streamAction({
   campaignId, scenarioTone, language, action, openingNarrative,
+  protagonistName, narrativePov, writingStyle,
   maxTokens, provider, model, temperature,
+  streamDeliverySpeed = 'instant',
   onChunk, onJournal, onMode, onCrystal, onPlotAuto, onInventory,
   onTruncateClean, onDone, onError,
-  onPendingActionId,
+  onPendingActionId, onRankAdvance,
 }) {
   // Generate a pending ID so we can detect incomplete responses after reload
   const pendingId = `pending-${campaignId}-${Date.now()}`
@@ -246,14 +345,18 @@ export function streamAction({
     headers: authHeader({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
       campaign_id: campaignId,
-      scenario_tone: scenarioTone,
-      language,
+      scenario_tone: scenarioTone || '',
+      protagonist_name: protagonistName || '',
+      narrative_pov: narrativePov || 'first_person',
+      writing_style: writingStyle || 'chinh_thong',
+      language: language || 'en',
       action,
       opening_narrative: openingNarrative || '',
       max_tokens: maxTokens || 2000,
       provider: provider || 'deepseek',
       model: model || 'deepseek-chat',
       temperature: temperature ?? 0.85,
+      stream_delivery_speed: streamDeliverySpeed || 'instant',
     }),
   })
     .then(async (res) => {
@@ -285,9 +388,15 @@ export function streamAction({
           return false
         }
         if (control.startsWith('[TRUNCATE_CLEAN]')) { onTruncateClean?.(control.slice(16)); return false }
+        if (control.startsWith('[RANK_ADVANCE]')) {
+          try { onRankAdvance?.(JSON.parse(control.slice(13))) } catch {}
+          return false
+        }
         let cleaned = stripPowerControlTags(data)
         cleaned = cleaned.replace(INTERNAL_TAG_STRIP_REGEX, '')
-        if (cleaned.trim()) onChunk?.(cleaned)
+        // Must not use trim() as the guard: LLM stream often sends spaces/newlines as
+        // their own chunks; dropping them causes merged words (e.g. "mờ" + "ảo" → "mờảo").
+        if (cleaned.length) onChunk?.(cleaned)
         return false
       }
 
@@ -368,6 +477,16 @@ export async function updateInventoryItem(campaignId, name, action) {
   return r.json()
 }
 
+export async function addInventoryItem(campaignId, name, category = 'misc', source = 'player') {
+  const r = await fetch(`${BASE}/game/${campaignId}/inventory/add`, {
+    method: 'POST',
+    headers: authHeader({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ name, category, source }),
+  })
+  if (!r.ok) throw new Error('Failed to add inventory item')
+  return r.json()
+}
+
 export async function fetchMemoryCrystals(campaignId) {
   const r = await fetch(`${BASE}/game/${campaignId}/memory-crystals`, { headers: authHeader() })
   if (!r.ok) throw new Error('Failed to fetch memory crystals')
@@ -386,6 +505,36 @@ export async function crystallizeMemory(campaignId) {
 export async function fetchNpcMinds(campaignId) {
   const r = await fetch(`${BASE}/game/${campaignId}/npc-minds`, { headers: authHeader() })
   if (!r.ok) throw new Error('Failed to fetch NPC minds')
+  return r.json()
+}
+
+export async function fetchCampaignPowerSystem(campaignId) {
+  const r = await fetch(`${BASE}/game/${campaignId}/power-system`, { headers: authHeader() })
+  if (!r.ok) return null
+  return r.json()
+}
+
+/** Update a character's progression on one axis. */
+export async function updateCharacterProgression(campaignId, payload) {
+  const r = await fetch(`${BASE}/game/${campaignId}/power-system/progressions`, {
+    method: 'POST',
+    headers: authHeader({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(payload),
+  })
+  if (!r.ok) throw new Error('Failed to update progression')
+  return r.json()
+}
+
+// DEBUG: inspect raw NPC minds and power system data
+export async function debugNpcMinds(campaignId) {
+  const r = await fetch(`${BASE}/game/${campaignId}/npc-minds/debug`, { headers: authHeader() })
+  if (!r.ok) throw new Error('debug failed')
+  return r.json()
+}
+
+export async function debugPowerSystem(campaignId) {
+  const r = await fetch(`${BASE}/game/${campaignId}/power-system/debug`, { headers: authHeader() })
+  if (!r.ok) throw new Error('debug failed')
   return r.json()
 }
 

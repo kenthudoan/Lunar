@@ -72,10 +72,67 @@ def _get_context_rules(language: str) -> str:
 class GeneratedNPC:
     name: str
     personality: str
-    power_level: int
+    realm: str        # realm key e.g. "tu_chan" (legacy)
+    tier: str         # tier key e.g. "truc_co" (legacy)
+    power_level: int  # numeric fallback 1-10 (derived from realm+tier)
     secret: str
     goal: str
     appearance: str
+
+
+@dataclass
+class GeneratedNPCMultiAxis:
+    """
+    NPC with multi-axis progression.
+    Each axis has: {axis_id, stage_name, stage_slug, sub_stage_slug (optional), raw_value}
+    """
+    name: str
+    personality: str
+    secret: str
+    goal: str
+    appearance: str
+    # {axis_id: {"stage_name": str, "stage_slug": str, "sub_stage_slug": str|null, "raw_value": int}}
+    progression: dict[str, dict]
+
+
+def generated_npc_to_multi_axis(npc: GeneratedNPC, power_system) -> GeneratedNPCMultiAxis | None:
+    """
+    Convert a legacy GeneratedNPC (realm/tier) to a multi-axis format
+    using the PowerSystemResolver.
+    """
+    if not power_system or not power_system.config:
+        return None
+    config = power_system.config
+    progression = {}
+
+    # Map legacy realm → primary axis
+    primary = next((ax for ax in config.axes if ax.is_primary), None)
+    if primary and npc.realm:
+        # Try to match realm name to a stage
+        matched_stage = None
+        matched_sub = None
+        for stage in primary.stages:
+            if stage.slug.lower() == npc.realm.lower():
+                matched_stage = stage
+                break
+
+    if matched_stage and primary:
+        raw = int(npc.power_level / 10.0 * primary.normalization_max) if primary.normalization_max else int(npc.power_level / 10.0 * 100)
+        progression[primary.axis_id] = {
+            "stage_name": matched_stage.name,
+            "stage_slug": matched_stage.slug,
+            "sub_stage_slug": None,
+            "raw_value": raw,
+        }
+
+    return GeneratedNPCMultiAxis(
+        name=npc.name,
+        personality=npc.personality,
+        secret=npc.secret,
+        goal=npc.goal,
+        appearance=npc.appearance,
+        progression=progression,
+    )
 
 
 @dataclass
@@ -164,7 +221,16 @@ class PlotGenerator:
         recent_narrative: str = "",
         existing_npc_names: list[str] | None = None,
         tone_instructions: str = "",
+        power_system_hint: str = "",
+        narrative_turns: int = 0,
     ) -> GeneratedNPC | None:
+        """
+        Generate a compelling NPC.
+
+        Args:
+            power_system_hint: realm context string from PowerSystemResolver.build_npc_tier_hint_for_ai()
+            narrative_turns: number of turns played — used to limit NPC tier (early game = lower tiers)
+        """
         lang_hint = f" Write all text values in {lang_name(language)}." if language and language != "en" else ""
         recent_hint = f"\n\nRecent narrative:\n{recent_narrative}" if recent_narrative else ""
         tone_hint = f"\n\nScenario tone and setting:\n{tone_instructions[:2000]}" if tone_instructions else ""
@@ -176,6 +242,17 @@ class PlotGenerator:
                 "Generate a DIFFERENT character with a UNIQUE name. Do NOT reuse or create "
                 "variations of existing names."
             )
+        system_hint = f"\n{power_system_hint}" if power_system_hint else ""
+
+        # Progressive tier lock: early game only gets tier index 0-2
+        tier_limit_hint = ""
+        if narrative_turns < 5:
+            tier_limit_hint = "\nCRITICAL: This is early game. NPCs should be LOW-level. "
+            if power_system_hint:
+                tier_limit_hint += "Pick the lowest tier in their realm."
+            else:
+                tier_limit_hint += "Use power_level 1-3 (novice/beginner level only)."
+
         messages = [
             {
                 "role": "system",
@@ -186,9 +263,14 @@ class PlotGenerator:
                     "in their current location and situation — a merchant, a guard, a traveler, "
                     "a rival, a servant, etc. NOT a major plot character or world-shaking figure. "
                     "Return ONLY valid JSON (no markdown): "
-                    '{"name": str, "personality": str, "power_level": int (1-10), '
-                    f'"secret": str, "goal": str, "appearance": str}}.{lang_hint}'
+                    '{"name": str, "personality": str, "realm": str, "tier": str, '
+                    '"power_level": int (1-10, derived from realm+tier), '
+                    '"secret": str, "goal": str, "appearance": str}}. '
+                    "IMPORTANT: realm and tier must be human-readable DISPLAY NAMES "
+                    "in the world's language (e.g. 'Tu Chân', 'Trúc Cơ', 'Hấp Khí Hậu Kỳ'). "
+                    f"Do NOT use underscore keys like 'tu_chan' or 'truc_co'.{lang_hint}"
                     f"{_get_context_rules(language)}"
+                    f"{system_hint}{tier_limit_hint}"
                 ),
             },
             {"role": "user", "content": f"World context:\n{world_context}{tone_hint}{recent_hint}{dedup_hint}"},
@@ -207,9 +289,17 @@ class PlotGenerator:
                 power = max(1, min(10, int(data.get("power_level", 5))))
             except (TypeError, ValueError):
                 power = 5
+            realm_val = str(data.get("realm", "")).strip()
+            tier_val = str(data.get("tier", "")).strip()
+            if not realm_val:
+                realm_val = "unknown"
+            if not tier_val:
+                tier_val = "unknown"
             return GeneratedNPC(
                 name=data.get("name", "Unknown"),
                 personality=data.get("personality", ""),
+                realm=realm_val,
+                tier=tier_val,
                 power_level=power,
                 secret=data.get("secret", ""),
                 goal=data.get("goal", ""),
@@ -375,3 +465,102 @@ class PlotGenerator:
         if stripped:
             return MicroHook(description=stripped)
         return None
+
+    # ---------------------------------------------------------------------------
+    # Multi-axis NPC generation
+    # ---------------------------------------------------------------------------
+
+    async def generate_npc_multi_axis(
+        self,
+        world_context: str,
+        language: str = "en",
+        recent_narrative: str = "",
+        existing_npc_names: list[str] | None = None,
+        tone_instructions: str = "",
+        power_system_hint: str = "",
+        narrative_turns: int = 0,
+    ) -> GeneratedNPCMultiAxis | None:
+        """
+        Generate an NPC with multi-axis progression.
+        The power_system_hint should include ALL axes (from PowerSystemResolver.build_npc_tier_hint_for_ai).
+        """
+        lang_hint = f" Write all text values in {lang_name(language)}." if language and language != "en" else ""
+        recent_hint = f"\n\nRecent narrative:\n{recent_narrative}" if recent_narrative else ""
+        tone_hint = f"\n\nScenario tone and setting:\n{tone_instructions[:2000]}" if tone_instructions else ""
+        dedup_hint = ""
+        if existing_npc_names:
+            names_str = ", ".join(existing_npc_names[:30])
+            dedup_hint = (
+                f"\n\nIMPORTANT: These NPCs already exist: [{names_str}]. "
+                "Generate a DIFFERENT character with a UNIQUE name."
+            )
+
+        tier_limit_hint = ""
+        if narrative_turns < 5:
+            tier_limit_hint = (
+                "\nCRITICAL: This is early game. NPCs should be LOW-level. "
+                "Pick the lowest or second-lowest stage for each axis."
+            )
+
+        axis_guidance = ""
+        if power_system_hint:
+            axis_guidance = (
+                f"\n\n{power_system_hint}"
+                "\nFor EACH axis, pick the most fitting stage for this NPC based on their role, personality, and backstory."
+                "\nFor example: a merchant NPC → high 'wealth' but low combat. "
+                "A street gang leader → high social influence but medium wealth."
+            )
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Generate a compelling NPC for this RPG world. "
+                    "Assign values to ALL appropriate axes based on the NPC's background. "
+                    "Return ONLY valid JSON (no markdown). "
+                    '{"name": str, "personality": str, '
+                    '"progression": {"axis_id": {"stage_name": str, "stage_slug": str, "sub_stage_slug": str|null, "raw_value": int (0-100)}, ...}, '
+                    '"secret": str, "goal": str, "appearance": str}. '
+                    "IMPORTANT: stage_name is the DISPLAY NAME (e.g. 'Trúc Cơ', 'Hấp Khí Hậu Kỳ'). "
+                    "stage_slug is the IDENTIFIER (e.g. 'truc_co', 'hap_khi_hau_ky'). "
+                    "sub_stage_slug: 'so_ky' for early, 'trung_ky' for mid, 'hau_ky' for late. "
+                    "If the NPC does not have a rank on an axis, omit that axis entirely.{lang_hint}"
+                    f"{_get_context_rules(language)}"
+                    f"{axis_guidance}{tier_limit_hint}"
+                ),
+            },
+            {"role": "user", "content": f"World context:\n{world_context}{tone_hint}{recent_hint}{dedup_hint}"},
+        ]
+        try:
+            raw = await self._llm.complete(messages=messages, max_tokens=2048)
+        except Exception:
+            logger.exception("Multi-axis NPC generation failed")
+            return None
+        if _is_none_response(raw):
+            logger.info("Multi-axis NPC generation skipped — LLM returned NONE")
+            return None
+        data = parse_json_dict(raw)
+        if not data:
+            logger.warning("Multi-axis NPC returned unparseable: %s", raw[:200])
+            return None
+
+        progression = {}
+        raw_prog = data.get("progression", {})
+        if isinstance(raw_prog, dict):
+            for axis_id, prog_data in raw_prog.items():
+                if isinstance(prog_data, dict):
+                    progression[str(axis_id)] = {
+                        "stage_name": str(prog_data.get("stage_name", "")),
+                        "stage_slug": str(prog_data.get("stage_slug", "")),
+                        "sub_stage_slug": prog_data.get("sub_stage_slug"),
+                        "raw_value": max(0, min(100, int(prog_data.get("raw_value", 50)))),
+                    }
+
+        return GeneratedNPCMultiAxis(
+            name=str(data.get("name", "Unknown")),
+            personality=str(data.get("personality", "")),
+            secret=str(data.get("secret", "")),
+            goal=str(data.get("goal", "")),
+            appearance=str(data.get("appearance", "")),
+            progression=progression,
+        )

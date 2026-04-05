@@ -49,6 +49,7 @@ export const useGameStore = create((set, get) => ({
   // Reading preferences
   readingFont: 'font-prose',   // CSS var name for narrative font
   fontSize: 16.5,              // base font size in px
+  streamDeliverySpeed: 'instant',  // backend throttle: 'instant'|'fast'|'normal'|'slow'|'typewriter'
 
   // ---- Apply reading font to <html> and CSS vars ----
   _applyReadingFont: (fontFamilyVar, fontSize) => {
@@ -139,6 +140,10 @@ export const useGameStore = create((set, get) => ({
   isStreaming: false,
   combatMode: false,
 
+  // ── Rank Entity System ─────────────────────────────────────────────────
+  playerRank: null,    // { entityName, tierValue, nextEntityName, requirements, requirementsMet }
+  rankAdvance: null,    // { fromEntity, toEntity, trigger, reason, narrative } — latest advance
+
   // ---- Settings ----
   updateSettings: (settings) => {
     try {
@@ -166,6 +171,7 @@ export const useGameStore = create((set, get) => ({
       if (s.maxTokens != null) restored.maxTokens = s.maxTokens
       if (s.readingFont) restored.readingFont = s.readingFont
       if (s.fontSize != null) restored.fontSize = s.fontSize
+      if (s.streamDeliverySpeed) restored.streamDeliverySpeed = s.streamDeliverySpeed
       if (Object.keys(restored).length > 0) set(restored)
       // Re-apply reading font from persisted settings
       if (restored.readingFont || restored.fontSize != null) {
@@ -328,6 +334,31 @@ export const useGameStore = create((set, get) => ({
 
   setStreaming: (isStreaming) => set({ isStreaming }),
   setCombatMode: (combatMode) => set({ combatMode }),
+
+  // ── Rank Entity System ─────────────────────────────────────────────────
+  setPlayerRank: (rank) => {
+    set({ playerRank: rank })
+    const { activeCampaignId } = get()
+    if (activeCampaignId) {
+      persistCampaignState(activeCampaignId, { playerRank: rank })
+    }
+  },
+
+  setRankAdvance: (advance) => {
+    set({ rankAdvance: advance })
+  },
+
+  clearRankAdvance: () => set({ rankAdvance: null }),
+
+  hydratePlayerRank: () => {
+    const { activeCampaignId } = get()
+    if (!activeCampaignId) return
+    const all = loadAllCampaigns()
+    const saved = all[activeCampaignId]
+    if (saved && saved.playerRank) {
+      set({ playerRank: saved.playerRank })
+    }
+  },
 
   // Delete a campaign from localStorage (used when user resets)
   deleteCampaignLocal: (campaignId) => {

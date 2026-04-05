@@ -37,6 +37,7 @@ function App() {
           <Route element={<RequireAuth><Layout /></RequireAuth>}>
             <Route path="/" element={<Home />} />
             <Route path="/create" element={<ScenarioBuilder />} />
+            <Route path="/edit/:scenarioId" element={<ScenarioBuilder />} />
             <Route path="/library" element={<Library />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/settings" element={<SettingsPage />} />

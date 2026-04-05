@@ -17,6 +17,9 @@ from app.engines.plot_generator import PlotGenerator
 from app.engines.npc_mind_engine import NpcMindEngine
 from app.engines.inventory_engine import InventoryEngine
 from app.engines.llm_router import LLMRouter, LLMConfig, LLMProvider
+from app.engines.power_system import PowerSystemResolver
+from app.engines.power_system_models import PowerSystemConfig
+from app.services.power_system_service import PowerSystemService
 from app.db.event_store import EventStore, EventType
 from app.db.scenario_store import ScenarioStore
 from app.middleware.auth import AuthUser, get_current_user
@@ -72,22 +75,61 @@ def _load_story_cards_for_campaign(campaign_id: str):
 
 
 def _load_scenario_for_campaign(campaign_id: str):
-    """Load scenario tone, language, and opening narrative for a campaign."""
+    """Load scenario for a campaign: tone, protagonist_name, pov, style, language, opening, power_system."""
     try:
         store = ScenarioStore(_SCENARIO_DB_PATH)
         conn = store._conn
         row = conn.execute(
-            "SELECT s.tone_instructions, s.language, s.opening_narrative "
+            "SELECT s.tone_instructions, s.protagonist_name, s.narrative_pov, s.writing_style, "
+            "s.language, s.opening_narrative, s.power_system_id "
             "FROM scenarios s JOIN campaigns c ON c.scenario_id = s.id "
             "WHERE c.id=?",
             (campaign_id,),
         ).fetchone()
         if not row:
-            return "", "en", ""
-        return row[0] or "", row[1] or "en", row[2] or ""
+            return "", "", "first_person", "chinh_thong", "en", "", None
+
+        ps_id_raw = row[6] if len(row) > 6 else None
+        power_system = None
+
+        if ps_id_raw:
+            # Check for multi-axis JSON config first
+            if isinstance(ps_id_raw, str) and ps_id_raw.startswith("{"):
+                try:
+                    import json as _json
+                    ps_data = _json.loads(ps_id_raw)
+                    from app.engines.power_system_models import PowerSystemConfig
+                    config = PowerSystemConfig.from_dict(ps_data)
+                    power_system = PowerSystemResolver(config)
+                    logger.info("Loaded multi-axis power system config for campaign %s", campaign_id)
+                except Exception as e:
+                    logger.warning("Failed to parse multi-axis config, falling back: %s", e)
+                    ps_raw = store.get_power_system(ps_id_raw)
+                    if ps_raw:
+                        power_system = PowerSystemResolver(ps_raw)
+            else:
+                # Legacy: power_system_id is a preset key string
+                ps_raw = store.get_power_system(ps_id_raw)
+                if ps_raw:
+                    power_system = PowerSystemResolver(ps_raw)
+
+        if power_system is None:
+            ps_raw = store.get_default_power_system()
+            if ps_raw:
+                power_system = PowerSystemResolver(ps_raw)
+
+        return (
+            row[0] or "",           # tone_instructions
+            row[1] or "",           # protagonist_name
+            row[2] or "first_person",  # narrative_pov
+            row[3] or "chinh_thong",   # writing_style
+            row[4] or "en",        # language
+            row[5] or "",          # opening_narrative
+            power_system,           # power_system (resolver)
+        )
     except Exception:
         logger.debug("Could not load scenario for campaign %s", campaign_id)
-        return "", "en", ""
+        return "", "", "first_person", "chinh_thong", "en", "", None
 
 
 def _ensure_session(campaign_id: str) -> GameSession:
@@ -99,7 +141,8 @@ def _ensure_session(campaign_id: str) -> GameSession:
     if campaign_id in _sessions:
         return _sessions[campaign_id]
 
-    tone, language, opening = _load_scenario_for_campaign(campaign_id)
+    tone, protagonist_name, narrative_pov, writing_style, language, opening, power_system = \
+        _load_scenario_for_campaign(campaign_id)
     story_cards = _load_story_cards_for_campaign(campaign_id)
     graph = _get_graph_engine(campaign_id)
     graphiti = _get_graphiti_engine()
@@ -109,6 +152,9 @@ def _ensure_session(campaign_id: str) -> GameSession:
     _sessions[campaign_id] = GameSession(
         campaign_id=campaign_id,
         scenario_tone=tone,
+        protagonist_name=protagonist_name,
+        narrative_pov=narrative_pov,
+        writing_style=writing_style,
         language=language,
         narrator=_narrator,
         memory=_memory,
@@ -123,6 +169,7 @@ def _ensure_session(campaign_id: str) -> GameSession:
         inventory_engine=_inventory,
         opening_narrative=opening,
         story_cards=story_cards,
+        power_system=power_system,
     )
     return _sessions[campaign_id]
 
@@ -211,6 +258,9 @@ async def _fallback_graph_search(campaign_id: str, query: str, limit: int = 10) 
 class PlayerActionRequest(BaseModel):
     campaign_id: str = Field(..., min_length=1, max_length=64)
     scenario_tone: str = Field(default="", max_length=10000)
+    protagonist_name: str = Field(default="", max_length=200)
+    narrative_pov: str = Field(default="first_person", max_length=50)
+    writing_style: str = Field(default="chinh_thong", max_length=50)
     language: str = Field(default="en", max_length=10)
     action: str = Field(..., min_length=1, max_length=10000)
     opening_narrative: str = Field(default="", max_length=20000)
@@ -218,6 +268,7 @@ class PlayerActionRequest(BaseModel):
     provider: str = Field(default="deepseek", max_length=20)
     model: str = Field(default="deepseek-chat", max_length=64)
     temperature: float = Field(default=0.85, ge=0.0, le=2.0)
+    stream_delivery_speed: str = Field(default="instant", max_length=20)  # instant|fast|normal|slow|typewriter
 
 
 class SettingsRequest(BaseModel):
@@ -245,6 +296,23 @@ class TimeskipRequest(BaseModel):
 class InventoryActionRequest(BaseModel):
     name: str
     action: str  # "use" or "discard"
+
+
+class AddInventoryRequest(BaseModel):
+    name: str
+    category: str = "misc"
+    source: str = "player"
+
+
+class UpdateProgressionRequest(BaseModel):
+    character_id: str
+    axis_id: str
+    stage_slug: str | None = None  # internal slug (e.g. "truc_co"), for lookups
+    stage_name: str | None = None  # display name (e.g. "Trúc Cơ Sơ Kỳ"), for UI
+    stage_index: int = 0
+    raw_value: int = 0
+    sub_stage_slug: str | None = None
+    xp_progress: float = 0.0
 
 
 def _get_graph_engine(campaign_id: str):
@@ -285,6 +353,9 @@ async def player_action(req: PlayerActionRequest, current_user: AuthUser = Depen
 
     # Update session with request-specific values that may differ per action
     session.scenario_tone = req.scenario_tone or session.scenario_tone
+    session.protagonist_name = req.protagonist_name or session.protagonist_name
+    session.narrative_pov = req.narrative_pov or session.narrative_pov
+    session.writing_style = req.writing_style or session.writing_style
     session.language = req.language or session.language
     # Apply user's LLM settings per-request
     try:
@@ -297,7 +368,7 @@ async def player_action(req: PlayerActionRequest, current_user: AuthUser = Depen
 
     async def event_stream():
         try:
-            async for chunk in session.process_action(req.action, max_tokens=req.max_tokens):
+            async for chunk in session.process_action(req.action, max_tokens=req.max_tokens, stream_delivery_speed=req.stream_delivery_speed):
                 # SSE requires each data line to be prefixed with "data:".
                 # This preserves paragraph breaks/newlines in streamed prose.
                 text = str(chunk).replace("\r\n", "\n").replace("\r", "\n")
@@ -368,7 +439,7 @@ async def get_history(campaign_id: str, current_user: AuthUser = Depends(get_cur
 
 @router.get("/{campaign_id}/scenario")
 async def get_campaign_scenario(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
-    """Return scenario metadata for the Play UI (title, opening, tone) after a full page reload."""
+    """Return scenario metadata for the Play UI (title, opening, tone, protagonist, pov, style) after a full page reload."""
     _require_campaign_access(campaign_id, current_user)
     store = ScenarioStore(_SCENARIO_DB_PATH)
     try:
@@ -382,6 +453,9 @@ async def get_campaign_scenario(campaign_id: str, current_user: AuthUser = Depen
             "id": scenario.id,
             "title": scenario.title,
             "description": scenario.description,
+            "protagonist_name": scenario.protagonist_name,
+            "narrative_pov": scenario.narrative_pov,
+            "writing_style": scenario.writing_style,
             "tone_instructions": scenario.tone_instructions,
             "opening_narrative": scenario.opening_narrative,
             "language": scenario.language,
@@ -431,12 +505,225 @@ async def get_journal(campaign_id: str, current_user: AuthUser = Depends(get_cur
     return [asdict(e) for e in entries]
 
 
+def _resolve_stage_name(slug_or_name: str, power_system) -> str:
+    """Resolve a stage slug → display name using power system config.
+    If already a display name (has spaces), return as-is."""
+    if not slug_or_name or not power_system:
+        return slug_or_name
+    v = str(slug_or_name).strip()
+    if ' ' in v or not v.replace('_', '').isascii():
+        return v
+    import unicodedata, re
+    def _slug(t):
+        t = unicodedata.normalize('NFD', t)
+        t = ''.join(c for c in t if unicodedata.category(c) != 'Mn')
+        t = t.lower().replace('đ', 'd').replace('Đ', 'D').replace(' ', '_')
+        return re.sub(r'[^a-z0-9_]', '', t)
+    norm = _slug(v)
+    for axis in power_system.axes:
+        for stage in axis.stages or []:
+            if stage.slug and _slug(stage.slug) == norm:
+                return stage.name
+            for sub in stage.sub_stages or []:
+                if sub.key and _slug(sub.key) == norm:
+                    return f"{stage.name} {sub.name}"
+    return v
+
+
+def _collect_latest_npc_thought_payloads(campaign_id: str) -> dict[str, dict]:
+    """Latest NPC_THOUGHT payload per NPC name (lowercase key)."""
+    latest: dict[str, dict] = {}
+    for ev in _event_store.get_by_type(campaign_id, EventType.NPC_THOUGHT):
+        name = (ev.payload.get("name") or "").strip()
+        if name:
+            latest[name.lower()] = ev.payload
+    return latest
+
+
+def _axis_display_name(ps_config: PowerSystemConfig | None, axis_id: str) -> str:
+    if not ps_config or not axis_id:
+        return axis_id or ""
+    for ax in ps_config.axes:
+        if ax.axis_id == axis_id:
+            return ax.axis_name
+    return axis_id
+
+
+def _realm_tier_from_npc_thought_payload(
+    payload: dict | None,
+    ps_config: PowerSystemConfig | None,
+) -> tuple[str, str]:
+    """Fill missing realm/tier display strings from NPC_THOUGHT payload + progression."""
+    if not payload:
+        return "", ""
+    realm = str(payload.get("realm") or "").strip()
+    tier = str(payload.get("tier") or "").strip()
+    prog = payload.get("progression")
+    if not isinstance(prog, dict) or not prog:
+        return realm, tier
+
+    primary_ax = None
+    if ps_config:
+        for ax in ps_config.axes:
+            if ax.is_primary:
+                primary_ax = ax.axis_id
+                break
+    axis_ids: list[str] = []
+    if primary_ax and primary_ax in prog:
+        axis_ids.append(primary_ax)
+    axis_ids.extend(k for k in prog if k not in axis_ids)
+
+    for aid in axis_ids:
+        pdata = prog.get(aid)
+        if not isinstance(pdata, dict):
+            continue
+        name = str(pdata.get("stage_name") or "").strip()
+        slug = str(pdata.get("stage_slug") or "").strip()
+        sub_slug = str(pdata.get("sub_stage_slug") or "").strip()
+        tier_candidate = name
+        if ps_config:
+            if slug and (not name or (name.replace("_", "").isascii() and " " not in name)):
+                tier_candidate = _resolve_stage_name(slug, ps_config)
+            elif name and (name.replace("_", "").isascii() and " " not in name):
+                tier_candidate = _resolve_stage_name(name, ps_config)
+        if not tier_candidate and slug:
+            tier_candidate = _resolve_stage_name(slug, ps_config) if ps_config else slug
+        if sub_slug and ps_config:
+            sub_disp = _resolve_stage_name(sub_slug, ps_config)
+            if sub_disp:
+                tier_candidate = f"{tier_candidate} {sub_disp}".strip() if tier_candidate else sub_disp
+        if tier_candidate or slug or name:
+            if not tier:
+                tier = tier_candidate or name or slug
+            if not realm:
+                realm = _axis_display_name(ps_config, aid)
+            break
+
+    if not realm and prog and ps_config:
+        first_axis = next(iter(prog.keys()))
+        realm = _axis_display_name(ps_config, first_axis)
+    return realm, tier
+
+
+def _enrich_npc_node_attributes_for_world_map(
+    attrs: dict,
+    npc_name: str,
+    thought_by_npc: dict[str, dict],
+    ps_config: PowerSystemConfig | None,
+) -> dict:
+    """When Neo4j has empty realm/tier, backfill from latest NPC mind event."""
+    out = dict(attrs or {})
+    key = npc_name.lower().strip()
+    payload = thought_by_npc.get(key)
+    if not payload:
+        for pl in thought_by_npc.values():
+            aliases = pl.get("aliases") or []
+            if any(key == str(a).lower().strip() for a in aliases):
+                payload = pl
+                break
+    r, t = _realm_tier_from_npc_thought_payload(payload, ps_config)
+    if not (out.get("realm") or "").strip() and r:
+        out["realm"] = r
+    if not (out.get("tier") or "").strip() and t:
+        out["tier"] = t
+    return out
+
+
 @router.get("/{campaign_id}/npc-minds")
 async def get_npc_minds(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
     _require_campaign_access(campaign_id, current_user)
-    _ensure_session(campaign_id)
-    minds = _npc_minds.get_all_minds(campaign_id)
-    return [m.to_dict() for m in minds]
+    session = _ensure_session(campaign_id)
+    minds = session._npc_minds.get_all_minds(campaign_id) if session._npc_minds else []
+
+    # Merge latest CHARACTER_PROGRESSION per (character_id, axis_id) into each mind
+    prog_events = _event_store.get_by_type(campaign_id, EventType.CHARACTER_PROGRESSION)
+    latest_prog: dict[str, dict] = {}
+    for ev in prog_events:
+        char_id = ev.payload.get("character_id", "")
+        axis_id = ev.payload.get("axis_id", "")
+        if char_id and axis_id:
+            key = (char_id, axis_id)
+            if key not in latest_prog:
+                latest_prog[key] = {
+                    "stage_index": ev.payload.get("stage_index"),
+                    "stage_slug": ev.payload.get("stage_slug"),
+                    "stage_name": ev.payload.get("stage_name"),
+                    "raw_value": ev.payload.get("raw_value"),
+                    "sub_stage_slug": ev.payload.get("sub_stage_slug"),
+                    "xp_progress": ev.payload.get("xp_progress"),
+                }
+
+    # Fetch power system snapshot from campaign for slug → display name resolution
+    power_system = None
+    try:
+        ps_store = ScenarioStore(_SCENARIO_DB_PATH)
+        campaign = ps_store.get_campaign(campaign_id)
+        if campaign and campaign.power_system_snapshot:
+            import json
+            ps_data = json.loads(campaign.power_system_snapshot)
+            power_system = PowerSystemConfig.from_dict(ps_data)
+        ps_store.close()
+    except Exception:
+        pass
+
+    result = []
+    for m in minds:
+        d = m.to_dict()
+        merged: dict[str, dict] = dict(m.progression)
+        for (char_id, axis_id), prog_data in latest_prog.items():
+            if char_id.lower() == m.name.lower() or char_id.lower() in [a.lower() for a in m.aliases]:
+                if axis_id not in merged:
+                    merged[axis_id] = {}
+                for key, val in prog_data.items():
+                    if val is not None and val != "":
+                        merged[axis_id][key] = val
+        # Resolve slugs → display names in merged progression
+        if power_system:
+            for axis_id, prog_data in merged.items():
+                name = prog_data.get("stage_name", "")
+                slug = prog_data.get("stage_slug", "")
+                # If stage_name is empty or looks like a slug, resolve from slug
+                if slug and (not name or (name.replace('_', '').isascii() and ' ' not in name)):
+                    prog_data["stage_name"] = _resolve_stage_name(slug, power_system)
+                # If stage_name still empty, try slug itself
+                elif name and (name.replace('_', '').isascii() and ' ' not in name):
+                    prog_data["stage_name"] = _resolve_stage_name(name, power_system)
+                # Resolve sub_stage_slug → sub_stage_name
+                sub_slug = prog_data.get("sub_stage_slug", "")
+                if sub_slug:
+                    prog_data["sub_stage_name"] = _resolve_stage_name(sub_slug, power_system)
+        d["progression"] = merged
+        result.append(d)
+
+    return result
+
+
+@router.get("/{campaign_id}/npc-minds/debug")
+async def get_npc_minds_debug(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
+    """DEBUG: return raw NPC minds data for inspection."""
+    _require_campaign_access(campaign_id, current_user)
+    session = _ensure_session(campaign_id)
+    minds = session._npc_minds.get_all_minds(campaign_id) if session._npc_minds else []
+    prog_events = _event_store.get_by_type(campaign_id, EventType.CHARACTER_PROGRESSION)
+    thought_events = _event_store.get_by_type(campaign_id, EventType.NPC_THOUGHT)
+    # Show protagonist progression
+    protagonist_mind = None
+    for m in minds:
+        if m.name.lower() in [session.protagonist_name.lower(), "player"]:
+            protagonist_mind = {
+                "name": m.name,
+                "realm": m.realm,
+                "tier": m.tier,
+                "progression_keys": list(m.progression.keys()),
+                "progression_sample": {k: v for k, v in list(m.progression.items())[:2]},
+            }
+    return {
+        "minds_count": len(minds),
+        "minds_names": [m.name for m in minds],
+        "protagonist": protagonist_mind,
+        "prog_events_count": len(prog_events),
+        "thought_events_count": len(thought_events),
+    }
 
 
 @router.get("/{campaign_id}/characters")
@@ -452,7 +739,9 @@ async def get_characters(campaign_id: str, current_user: AuthUser = Depends(get_
     seen_names: set[str] = set()
 
     # NPCs from mind engine (primary source — has thoughts and aliases)
-    for mind in _npc_minds.get_all_minds(campaign_id):
+    session = _sessions.get(campaign_id)
+    npc_minds = session._npc_minds if session and session._npc_minds else None
+    for mind in (npc_minds.get_all_minds(campaign_id) if npc_minds else []):
         name_lower = mind.name.lower()
         if name_lower in seen_names:
             continue
@@ -511,7 +800,7 @@ async def get_memory_crystals(campaign_id: str, current_user: AuthUser = Depends
 @router.post("/{campaign_id}/crystallize")
 async def crystallize_memory(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
     _require_campaign_access(campaign_id, current_user)
-    _, language, _ = _load_scenario_for_campaign(campaign_id)
+    _, _, _, _, language, _, _ = _load_scenario_for_campaign(campaign_id)
     crystal = await _memory.crystallize(campaign_id, CrystalTier.SHORT, language=language)
     return {
         "tier": crystal.tier.value,
@@ -524,8 +813,22 @@ async def crystallize_memory(campaign_id: str, current_user: AuthUser = Depends(
 async def generate_content(campaign_id: str, req: GenerateRequest, current_user: AuthUser = Depends(get_current_user)):
     _require_campaign_access(campaign_id, current_user)
     world_ctx = _memory.build_context_window(campaign_id)
+    # Load power system for this campaign
+    _, _, _, _, language, _, power_system = _load_scenario_for_campaign(campaign_id)
+    narrative_turns = _event_store.get_total_narrative_time(campaign_id) // 300  # rough turn estimate
     if req.type == "npc":
-        npc = await _plot_generator.generate_npc(world_ctx, language=req.language)
+        power_hint = ""
+        if power_system:
+            power_hint = power_system.build_npc_tier_hint_for_ai(
+                max_realm_order=max(1, narrative_turns // 5) if narrative_turns else 1,
+                max_tier_index=min(2, narrative_turns // 3) if narrative_turns else 0,
+            )
+        npc = await _plot_generator.generate_npc(
+            world_ctx,
+            language=req.language or language,
+            power_system_hint=power_hint,
+            narrative_turns=narrative_turns,
+        )
         return asdict(npc)
     elif req.type == "event":
         total_time = _event_store.get_total_narrative_time(campaign_id)
@@ -609,8 +912,18 @@ async def inject_npc_seed(campaign_id: str, req: GenerateRequest, current_user: 
     existing_names = []
     if session._npc_minds:
         existing_names = [m.name for m in session._npc_minds.get_all_minds(campaign_id)]
+    power_hint = ""
+    if session._power_system:
+        power_hint = session._power_system.build_npc_tier_hint_for_ai(
+            max_realm_order=max(1, session._turn_count // 5),
+            max_tier_index=min(2, session._turn_count // 3),
+        )
     npc = await _plot_generator.generate_npc(
-        world_ctx, language=req.language, existing_npc_names=existing_names,
+        world_ctx,
+        language=req.language,
+        existing_npc_names=existing_names,
+        power_system_hint=power_hint,
+        narrative_turns=session._turn_count,
     )
     from dataclasses import asdict as _asdict
     npc_data = _asdict(npc)
@@ -676,6 +989,15 @@ async def update_inventory(campaign_id: str, req: InventoryActionRequest, curren
     return {"status": "ok"}
 
 
+@router.post("/{campaign_id}/inventory/add")
+async def add_inventory_item(campaign_id: str, req: AddInventoryRequest, current_user: AuthUser = Depends(get_current_user)):
+    _require_campaign_access(campaign_id, current_user)
+    _ensure_session(campaign_id)
+    _inventory.add_item(campaign_id, req.name, req.category, req.source)
+    items = _inventory.get_inventory(campaign_id)
+    return [{"name": i.name, "category": i.category, "source": i.source, "status": i.status} for i in items]
+
+
 @router.get("/{campaign_id}/graph-search")
 async def graph_search(campaign_id: str, current_user: AuthUser = Depends(get_current_user), q: str = ""):
     _require_campaign_access(campaign_id, current_user)
@@ -693,6 +1015,112 @@ async def graph_search(campaign_id: str, current_user: AuthUser = Depends(get_cu
     return {"facts": facts}
 
 
+async def _sync_story_cards_to_graph(campaign_id: str) -> int:
+    """
+    Write all story cards from the campaign's scenario into Neo4j.
+    Returns the number of nodes created.
+    Skipped card types: RANK (rank systems are not world entities).
+    """
+    from app.db.scenario_store import StoryCardType
+    from app.engines.graph_engine import WorldNodeType
+
+    TYPE_MAP = {
+        StoryCardType.NPC:       WorldNodeType.NPC,
+        StoryCardType.LOCATION:  WorldNodeType.LOCATION,
+        StoryCardType.FACTION:   WorldNodeType.FACTION,
+        StoryCardType.ITEM:      WorldNodeType.ITEM,
+        StoryCardType.LORE:      WorldNodeType.EVENT,
+        # RANK is intentionally skipped — it belongs in the power system panel
+    }
+
+    try:
+        store = ScenarioStore(_SCENARIO_DB_PATH)
+        campaign = store.get_campaign(campaign_id)
+        if not campaign:
+            store.close()
+            return 0
+        cards = store.get_story_cards(campaign.scenario_id)
+        store.close()
+    except Exception:
+        logger.warning("Could not load story cards for campaign %s", campaign_id)
+        return 0
+
+    if not cards:
+        return 0
+
+    engine = _get_graph_engine(campaign_id)
+    if not engine:
+        return 0
+
+    try:
+        await engine.initialize()
+    except Exception as e:
+        logger.warning("Could not initialize graph engine for campaign %s: %s", campaign_id, e)
+        return 0
+
+    node_ids: dict[str, str] = {}   # card_name → neo4j_node_id
+    created = 0
+
+    for card in cards:
+        mapped_type = TYPE_MAP.get(card.card_type)
+        if not mapped_type:
+            continue  # RANK etc.
+
+        attrs = dict(card.content) if card.content else {}
+        # Pull a short summary for the graph label if description is missing
+        if not attrs.get("description"):
+            for key in ("summary", "goal", "appearance", "history"):
+                if attrs.get(key):
+                    attrs["description"] = str(attrs[key])[:200]
+                    break
+
+        try:
+            node = await engine.add_node(mapped_type, card.name, attrs)
+            node_ids[card.name.lower()] = node.id
+            created += 1
+        except Exception as e:
+            logger.debug("Could not add node %s: %s", card.name, e)
+
+    # Build relationships from content fields
+    REL_FIELD_MAP = [
+        # (source_type, target_type, field_name, rel_type)
+        ("leader",  "NPC",      "leader"),
+        ("members", "NPC",      "MEMBER_OF"),
+        ("founder", "NPC",      "FOUNDED_BY"),
+        ("ruler",   "NPC",      "RULED_BY"),
+        ("faction", "FACTION",  "PART_OF"),
+        ("location","LOCATION", "LOCATED_AT"),
+        ("home",    "LOCATION", "HOME_OF"),
+    ]
+
+    for card in cards:
+        attrs = dict(card.content) if card.content else {}
+        mapped_type = TYPE_MAP.get(card.card_type)
+        if not mapped_type:
+            continue
+
+        source_id = node_ids.get(card.name.lower())
+        if not source_id:
+            continue
+
+        for field_key, target_type, rel_type in REL_FIELD_MAP:
+            raw = attrs.get(field_key)
+            if not raw:
+                continue
+            names = [n.strip() for n in str(raw).split(",")]
+            for name in names:
+                target_id = node_ids.get(name.lower())
+                if not target_id or target_id == source_id:
+                    continue
+                try:
+                    await engine.add_relationship(source_id, target_id, rel_type, 1.0)
+                except Exception:
+                    pass
+
+    logger.info("Synced %d story cards to Neo4j for campaign %s", created, campaign_id)
+    return created
+
+
 @router.get("/{campaign_id}/world-graph")
 async def get_world_graph(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
     _require_campaign_access(campaign_id, current_user)
@@ -703,13 +1131,40 @@ async def get_world_graph(campaign_id: str, current_user: AuthUser = Depends(get
         await engine.initialize()
         nodes = await engine.get_all_nodes()
         rels = await engine.get_all_relationships()
+
+        # If the graph is empty, seed it from story cards so the World Map
+        # shows the entities created during scenario expansion.
+        if not nodes:
+            await _sync_story_cards_to_graph(campaign_id)
+            nodes = await engine.get_all_nodes()
+            rels = await engine.get_all_relationships()
+
+        ps_config = None
+        try:
+            ps_store = ScenarioStore(_SCENARIO_DB_PATH)
+            campaign = ps_store.get_campaign(campaign_id)
+            ps_store.close()
+            if campaign and campaign.power_system_snapshot:
+                import json as _json
+                ps_config = PowerSystemConfig.from_dict(_json.loads(campaign.power_system_snapshot))
+        except Exception:
+            pass
+
+        thought_by_npc = _collect_latest_npc_thought_payloads(campaign_id)
+
         return {
             "nodes": [
                 {
                     "id": n.id,
                     "name": n.name,
                     "node_type": n.node_type.value,
-                    "attributes": n.attributes,
+                    "attributes": (
+                        _enrich_npc_node_attributes_for_world_map(
+                            n.attributes, n.name, thought_by_npc, ps_config
+                        )
+                        if n.node_type.value == "NPC"
+                        else (n.attributes or {})
+                    ),
                 }
                 for n in nodes
             ],
@@ -726,3 +1181,136 @@ async def get_world_graph(campaign_id: str, current_user: AuthUser = Depends(get
     except Exception as e:
         logger.warning("Failed to fetch world graph for campaign %s: %s", campaign_id, e)
         return {"nodes": [], "links": []}
+
+
+# ---------------------------------------------------------------------------
+# Power System / Progression endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/{campaign_id}/power-system/debug")
+def get_campaign_power_system_debug(
+    campaign_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """DEBUG: return power system config for this campaign."""
+    _require_campaign_access(campaign_id, current_user)
+    store = ScenarioStore(_SCENARIO_DB_PATH)
+    try:
+        row = store._conn.execute(
+            "SELECT s.power_system_id FROM scenarios s JOIN campaigns c ON c.scenario_id = s.id WHERE c.id=?",
+            (campaign_id,),
+        ).fetchone()
+        ps_id = row[0] if row else None
+        snapshot = store.get_campaign_snapshot(campaign_id)
+        # Check if it's JSON with axes
+        import json as _json
+        has_axes = False
+        if ps_id and isinstance(ps_id, str) and ps_id.startswith("{"):
+            try:
+                parsed = _json.loads(ps_id)
+                has_axes = "axes" in parsed and len(parsed.get("axes", [])) > 0
+            except Exception:
+                pass
+        return {
+            "power_system_id": ps_id[:100] if ps_id else None,
+            "campaign_snapshot": snapshot[:100] if snapshot else None,
+            "has_axes_in_ps_id": has_axes,
+            "is_json": isinstance(ps_id, str) and ps_id.startswith("{") if ps_id else False,
+        }
+    finally:
+        store.close()
+
+
+@router.get("/{campaign_id}/power-system")
+def get_campaign_power_system(
+    campaign_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """
+    Return the locked power system config for this campaign.
+    Returns the multi-axis config with axes array, or null.
+    """
+    _require_campaign_access(campaign_id, current_user)
+    store = ScenarioStore(_SCENARIO_DB_PATH)
+    try:
+        snapshot = store.get_campaign_snapshot(campaign_id)
+        if not snapshot:
+            return None
+        # If it's a preset key, fetch the preset info
+        if not snapshot.startswith("{"):
+            from app.engines.power_system_presets import get_preset
+            from app.engines.power_system_models import axis_to_dict
+            preset = get_preset(snapshot)
+            if preset and "axes" in preset:
+                return {
+                    "mode": "multi_axis",
+                    "axes": [axis_to_dict(a) for a in preset["axes"]],
+                }
+            return None
+        # Multi-axis JSON blob
+        try:
+            import json as _json
+            data = _json.loads(snapshot)
+            return {"mode": "multi_axis", "axes": data.get("axes", [])}
+        except Exception:
+            return None
+    finally:
+        store.close()
+
+
+@router.get("/{campaign_id}/power-system/progressions")
+def get_character_progressions(
+    campaign_id: str,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """
+    Return all character progressions stored in the event store.
+    Stored as CHARACTER_PROGRESSION events.
+    """
+    _require_campaign_access(campaign_id, current_user)
+    events = _event_store.get_by_type(campaign_id, EventType.CHARACTER_PROGRESSION)
+    return [
+        {
+            "character_id": e.payload.get("character_id"),
+            "axis_id": e.payload.get("axis_id"),
+            "stage_slug": e.payload.get("stage_slug"),
+            "stage_name": e.payload.get("stage_name"),
+            "stage_index": e.payload.get("stage_index"),
+            "raw_value": e.payload.get("raw_value"),
+            "sub_stage_slug": e.payload.get("sub_stage_slug"),
+            "xp_progress": e.payload.get("xp_progress", 0.0),
+        }
+        for e in events
+    ]
+
+
+@router.post("/{campaign_id}/power-system/progressions")
+def update_character_progression(
+    campaign_id: str,
+    req: UpdateProgressionRequest,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """
+    Store a character progression snapshot in the event store.
+    Body: { character_id, axis_id, stage_slug, stage_name, stage_index, raw_value, sub_stage_slug, xp_progress }
+    """
+    _require_campaign_access(campaign_id, current_user)
+    _event_store.append(
+        campaign_id=campaign_id,
+        event_type=EventType.CHARACTER_PROGRESSION,
+        payload={
+            "character_id": req.character_id,
+            "axis_id": req.axis_id,
+            "stage_slug": req.stage_slug,
+            "stage_name": req.stage_name,
+            "stage_index": req.stage_index,
+            "raw_value": req.raw_value,
+            "sub_stage_slug": req.sub_stage_slug,
+            "xp_progress": req.xp_progress,
+        },
+        narrative_time_delta=0,
+        location="system",
+        entities=[req.character_id],
+    )
+    return {"status": "ok"}
+

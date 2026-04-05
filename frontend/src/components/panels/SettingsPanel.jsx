@@ -3,12 +3,6 @@ import Modal from '../UI/Modal'
 import { useGameStore } from '../../store'
 import { useI18n } from '../../i18n'
 
-const PROVIDERS = [
-  { id: 'deepseek',  label: 'DeepSeek',  models: ['deepseek-chat', 'deepseek-reasoner'] },
-  { id: 'anthropic', label: 'Anthropic', models: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-6'] },
-  { id: 'openai',   label: 'OpenAI',    models: ['gpt-4o', 'gpt-4o-mini'] },
-]
-
 const READING_FONTS = [
   { id: 'font-prose',     label: { vi: 'Mặc định (Lora)', en: 'Default (Lora)' },      cssFamily: 'var(--font-prose)' },
   { id: 'font-reading-1', label: { vi: 'Be Vietnam Pro',   en: 'Be Vietnam Pro' },        cssFamily: 'var(--font-reading-1)' },
@@ -16,35 +10,23 @@ const READING_FONTS = [
   { id: 'font-reading-3', label: { vi: 'Merriweather',     en: 'Merriweather' },         cssFamily: 'var(--font-reading-3)' },
 ]
 
-const FONT_SIZES = [13, 14, 15, 16, 16.5, 17, 18, 19, 20, 21, 22]
-
 export default function SettingsPanel({ open, onClose }) {
   const { t } = useI18n()
-  const { llmProvider, llmModel, temperature, maxTokens, readingFont, fontSize, updateSettings } = useGameStore()
-  const [provider, setProvider] = useState(llmProvider)
-  const [model, setModel] = useState(llmModel)
-  const [temp, setTemp] = useState(temperature)
-  const [tokens, setTokens] = useState(maxTokens)
+  const { readingFont, fontSize, streamDeliverySpeed, updateSettings } = useGameStore()
+
   const [font, setFont] = useState(readingFont || 'font-prose')
   const [size, setSize] = useState(fontSize || 16.5)
+  const [delSpeedIdx, setDelSpeedIdx] = useState(() => {
+    const map = { 'instant': 0, 'fast': 1, 'normal': 2, 'slow': 3, 'typewriter': 4 }
+    return map[streamDeliverySpeed] ?? 0
+  })
   const [saved, setSaved] = useState(false)
-
-  const currentProviderModels = PROVIDERS.find((p) => p.id === provider)?.models || []
-
-  const handleProviderChange = (newProvider) => {
-    setProvider(newProvider)
-    const providerModels = PROVIDERS.find((p) => p.id === newProvider)?.models || []
-    setModel(providerModels[0] || '')
-  }
 
   const handleSave = () => {
     updateSettings({
-      llmProvider: provider,
-      llmModel: model,
-      temperature: temp,
-      maxTokens: tokens,
       readingFont: font,
       fontSize: size,
+      streamDeliverySpeed: ['instant', 'fast', 'normal', 'slow', 'typewriter'][delSpeedIdx],
     })
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -55,52 +37,6 @@ export default function SettingsPanel({ open, onClose }) {
   return (
     <Modal open={open} onClose={onClose} title={t('panel.settings')} size="md">
       <div className="p-4 space-y-5">
-        {/* Provider */}
-        <div>
-          <label className="label">{t('settings.provider')}</label>
-          <select value={provider} onChange={(e) => handleProviderChange(e.target.value)} className="input select">
-            {PROVIDERS.map((p) => (
-              <option key={p.id} value={p.id} className="bg-[var(--bg-elevated)] text-[var(--text-primary)]">{p.label}</option>
-            ))}
-          </select>
-        </div>
-
-        {/* Model */}
-        <div>
-          <label className="label">{t('settings.model')}</label>
-          <select value={model} onChange={(e) => setModel(e.target.value)} className="input select">
-            {currentProviderModels.map((m) => (
-              <option key={m} value={m} className="bg-[var(--bg-elevated)] text-[var(--text-primary)]">{m}</option>
-            ))}
-          </select>
-        </div>
-
-        {/* Temperature */}
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <label className="label mb-0">{t('settings.temperature')}</label>
-            <span className="text-xs font-mono text-[var(--text-secondary)]">{temp.toFixed(2)}</span>
-          </div>
-          <input type="range" min={0} max={2} step={0.05} value={temp} onChange={(e) => setTemp(parseFloat(e.target.value))} className="w-full accent-white h-1.5 bg-[var(--accent-muted)] rounded-full appearance-none cursor-pointer" />
-          <div className="flex justify-between text-[9px] text-[var(--text-disabled)] mt-1">
-            <span>{t('settings.precise')}</span><span>{t('settings.balanced')}</span><span>{t('settings.creative')}</span>
-          </div>
-        </div>
-
-        {/* Max Tokens */}
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <label className="label mb-0">{t('settings.maxTokens')}</label>
-            <span className="text-xs font-mono text-[var(--text-secondary)]">{tokens}</span>
-          </div>
-          <input type="range" min={256} max={8192} step={256} value={tokens} onChange={(e) => setTokens(parseInt(e.target.value))} className="w-full accent-white h-1.5 bg-[var(--accent-muted)] rounded-full appearance-none cursor-pointer" />
-          <div className="flex justify-between text-[9px] text-[var(--text-disabled)] mt-1">
-            <span>{t('settings.short')}</span><span>{t('settings.standard')}</span><span>{t('settings.extended')}</span>
-          </div>
-        </div>
-
-        {/* Divider */}
-        <div className="divider" />
 
         {/* Reading Font */}
         <div>
@@ -165,6 +101,30 @@ export default function SettingsPanel({ open, onClose }) {
               {lang === 'vi' ? 'Xem trước' : 'Preview'}
             </span>
             Ngươi tỉnh dậy trong bóng tối. Không khí nồng nặc mùi máu. Một tiếng động nhỏ phía sau rèm...
+          </div>
+        </div>
+
+        {/* Stream Delivery Speed */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="label mb-0">{lang === 'vi' ? 'Tốc Độ Server' : 'Stream Delivery'}</label>
+            <span className="text-xs font-mono text-[var(--text-secondary)]">
+              {['0ms', '5ms', '20ms', '100ms', '65ms'][delSpeedIdx]}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={4}
+            step={1}
+            value={delSpeedIdx}
+            onChange={(e) => setDelSpeedIdx(parseInt(e.target.value))}
+            className="w-full accent-white h-1.5 bg-[var(--accent-muted)] rounded-full appearance-none cursor-pointer"
+          />
+          <div className="flex justify-between text-[9px] text-[var(--text-disabled)] mt-1">
+            <span>{lang === 'vi' ? 'Tức thì' : 'Instant'}</span>
+            <span>{lang === 'vi' ? 'Bình thường' : 'Normal'}</span>
+            <span>{lang === 'vi' ? 'Chậm nhất' : 'Slowest'}</span>
           </div>
         </div>
 

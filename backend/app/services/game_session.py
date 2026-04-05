@@ -13,17 +13,31 @@ from app.utils.json_parsing import parse_json_dict
 logger = logging.getLogger(__name__)
 
 
+def _slugify(text: str) -> str:
+    """Convert text to ASCII slug (matches backend _slugify)."""
+    import unicodedata
+    text = unicodedata.normalize('NFD', text)
+    text = ''.join(c for c in text if unicodedata.category(c) != 'Mn')
+    text = text.lower().replace('đ', 'd').replace('Đ', 'D')
+    text = text.replace(' ', '_')
+    import re
+    return re.sub(r'[^a-z0-9_]', '', text)
+
+
 class GameSession:
     def __init__(
         self,
         campaign_id: str,
         scenario_tone: str,
-        language: str,
-        narrator,
-        memory,
-        world_reactor,
-        journal,
-        event_store: EventStore,
+        protagonist_name: str = "",
+        narrative_pov: str = "first_person",
+        writing_style: str = "chinh_thong",
+        language: str = "en",
+        narrator=None,
+        memory=None,
+        world_reactor=None,
+        journal=None,
+        event_store: EventStore | None = None,
         combat_engine=None,
         graph_engine=None,
         npc_minds=None,
@@ -33,9 +47,13 @@ class GameSession:
         auto_plot_rules=None,
         opening_narrative: str = "",
         story_cards: list | None = None,
+        power_system=None,        # PowerSystemResolver instance or None
     ):
         self.campaign_id = campaign_id
         self.scenario_tone = scenario_tone
+        self.protagonist_name = protagonist_name
+        self.narrative_pov = narrative_pov
+        self.writing_style = writing_style
         self.language = language
         self._narrator = narrator
         self._memory = memory
@@ -49,6 +67,24 @@ class GameSession:
         self._graphiti = graphiti_engine
         self._plot_generator = plot_generator
         self._inventory = inventory_engine
+        self._power_system = power_system   # PowerSystemResolver instance
+
+        # ── Rank Advancer (rank entity system) ────────────────────────────
+        self._rank_graph = None
+        self._rank_advancer = None
+        self._rank_seeded = False
+
+        if graph_engine is not None and power_system is not None and power_system.progression_engine is not None:
+            try:
+                from app.engines.rank_graph import RankGraph
+                from app.engines.rank_advancer import RankAdvancer
+                self._rank_graph = RankGraph(graph_engine)
+                if narrator and hasattr(narrator, "_llm"):
+                    self._rank_advancer = RankAdvancer(llm=narrator._llm, rank_graph=self._rank_graph)
+                    logger.info("RankAdvancer ready for campaign %s", campaign_id)
+            except Exception:
+                logger.warning("Failed to initialise RankAdvancer", exc_info=True)
+
         self._history: list[dict] = []
         self._turn_count = 0
         self._streaming = False  # prevents concurrent streams for the same campaign
@@ -57,28 +93,38 @@ class GameSession:
             kind: {"last_turn": 0, "last_narrative_time": 0, "trigger_count": 0}
             for kind in self._auto_plot_rules.keys()
         }
-        # Active plot seeds and micro-hooks fed to the narrator as context
         self._active_plot_seeds: list[str] = []
         self._pending_micro_hook: str = ""
-        # Pending NPC seed: an auto-generated NPC waiting to be introduced
-        # in the narrative. Only one at a time — no new generation until
-        # the narrator has woven this NPC into the story.
         self._pending_npc_seed: dict | None = None
         self._pending_npc_introduced = False
-        # Plot lock: only one active element at a time. A new element can only
-        # be generated after the current one is presented and developed.
         self._plot_pending = False
         self._plot_pending_since_turn = 0
-        self._PLOT_CONSUME_TURNS = 4  # minimum turns before a plot is considered consumed
-        self._PLOT_MIN_CONSUME_TURNS = 2  # minimum turns even if confirmed in narrative
-
-        # Player power level (0-10), initialized from scenario or events
-        self._player_power: int = self._init_player_power()
-        # Known opponent power levels — persisted from previous combats
+        self._PLOT_CONSUME_TURNS = 4
+        self._PLOT_MIN_CONSUME_TURNS = 2
         self._known_opponent_powers: dict[str, int] = {}
+        self._player_power: int = 0
+        self._player_power = self._init_player_power(opening_narrative)
 
-        # Rebuild conversation history from persisted events so the AI
-        # has full context even after a server restart or new session.
+    def _resolve_tier_display(self, value: str) -> str:
+        """Resolve a tier value (slug or display name) → display name for UI.
+        Uses power system config if available."""
+        if not value or not self._power_system:
+            return value
+        v = str(value).strip()
+        # Already a display name (has spaces or non-ASCII chars) → return as-is
+        if ' ' in v or not v.replace('_', '').isascii():
+            return v
+        norm = _slugify(v).lower()
+        for axis in self._power_system.axes:
+            for stage in axis.stages or []:
+                if stage.slug and _slugify(stage.slug).lower() == norm:
+                    return stage.name
+                for sub in stage.sub_stages or []:
+                    if sub.key and _slugify(sub.key).lower() == norm:
+                        return f"{stage.name} {sub.name}"
+        return v
+
+    def _init_player_power(self, opening_narrative: str) -> int:
         self._rebuild_history_from_events()
         self._rebuild_npc_minds_from_events()
         self._rebuild_plot_lock_from_events()
@@ -87,10 +133,9 @@ class GameSession:
         self._rebuild_player_power()
         self._rebuild_known_opponent_powers()
 
-        # If this is a brand-new campaign (no history) and we have an
-        # opening narrative, seed the history so the AI knows the story setup.
         if not self._history and opening_narrative:
             self._history.append({"role": "assistant", "content": opening_narrative})
+        return self._player_power
 
     def _last_pending_player_event(self):
         """Latest PLAYER_ACTION with no NARRATOR_RESPONSE after it (matches GET /pending-action)."""
@@ -154,6 +199,15 @@ class GameSession:
             for key, value in payload.get("thoughts", {}).items():
                 if value:
                     mind.set_thought(key, str(value))
+            # Restore realm+tier from events (tier may be a slug — resolve to display name)
+            if payload.get("realm"):
+                mind.realm = str(payload["realm"])
+            if payload.get("tier"):
+                mind.tier = self._resolve_tier_display(str(payload["tier"]))
+            # Restore multi-axis progression
+            prog = payload.get("progression")
+            if prog and isinstance(prog, dict):
+                mind.set_progression(prog)
         logger.info(
             "Rebuilt %d NPC minds from events for campaign %s",
             len(latest_per_npc), self.campaign_id,
@@ -367,10 +421,6 @@ class GameSession:
             "Unnamed creatures/enemies should be calibrated relative to these anchors."
         )
 
-    def _init_player_power(self) -> int:
-        """Sync default — overridden by _rebuild_player_power or _ensure_player_power."""
-        return 3
-
     def _rebuild_player_power(self) -> None:
         """Rebuild player power from the latest POWER_LEVEL_UPDATE event."""
         events = self._event_store.get_by_type(
@@ -499,8 +549,19 @@ class GameSession:
         for card in self._story_cards:
             if hasattr(card, 'card_type') and getattr(card.card_type, 'value', str(card.card_type)).upper() == "NPC":
                 if card.name.lower() == name_lower or name_lower in card.name.lower():
-                    power = card.content.get("power_level", llm_estimate) if isinstance(card.content, dict) else llm_estimate
-                    return max(1, min(10, int(power)))
+                    if isinstance(card.content, dict):
+                        realm = str(card.content.get("realm", ""))
+                        sub_tier = int(card.content.get("sub_tier", 2))
+                        # Try to resolve via rank's power_value + sub_tier
+                        if realm and self._power_system:
+                            power = self._power_system.resolve_power_score(realm, "", sub_tier=sub_tier, power_level=5)
+                            return max(1, min(10, int(round(power))))
+                        elif realm:
+                            # No power system: sub_tier only (1→3.6, 2→4.5, 3→5.4 on 1-10 scale)
+                            sub_bonus = (sub_tier - 1) / 2.0 * 0.9
+                            return max(1, min(10, int(round(5.0 + sub_bonus))))
+                        return max(1, min(10, llm_estimate))
+                    return max(1, min(10, llm_estimate))
 
         # 2. Check previous combats (same or similar opponent type)
         if name_lower in self._known_opponent_powers:
@@ -512,6 +573,90 @@ class GameSession:
 
         # 3. Fall back to LLM estimate
         return max(1, min(10, llm_estimate))
+
+    async def _resolve_opponent_realm_tier(self, opponent_name: str, llm_estimate: int) -> tuple[str, str, int]:
+        """
+        Resolve opponent realm+tier+power with priority: story cards > previous combats > LLM.
+        Returns (realm_name, tier_name, power_score).
+        """
+        if not opponent_name:
+            return "", "", llm_estimate
+
+        name_lower = opponent_name.lower()
+
+        # 1. Check story cards
+        for card in self._story_cards:
+            if hasattr(card, 'card_type') and getattr(card.card_type, 'value', str(card.card_type)).upper() == "NPC":
+                if card.name.lower() == name_lower or name_lower in card.name.lower():
+                    if isinstance(card.content, dict):
+                        realm = str(card.content.get("realm", ""))
+                        tier = str(card.content.get("tier", ""))
+                        sub_tier = int(card.content.get("sub_tier", 2))
+                        if realm:
+                            power = llm_estimate
+                            if self._power_system:
+                                power = int(round(self._power_system.resolve_power_score(
+                                    realm, tier or "Sơ Kỳ",
+                                    sub_tier=sub_tier,
+                                    power_level=llm_estimate,
+                                )))
+                            return realm, tier or "", sub_tier
+
+        # 2. Check graph engine for realm+tier on named NPC
+        if self._graph:
+            try:
+                realm, tier, sub_tier = await self._graph.get_npc_realm_tier(opponent_name)
+                if realm:
+                    power = llm_estimate
+                    if self._power_system:
+                        power = int(round(self._power_system.resolve_power_score(
+                            realm, tier or "Sơ Kỳ",
+                            sub_tier=sub_tier,
+                            power_level=llm_estimate,
+                        )))
+                    return realm, tier or "", sub_tier
+            except Exception:
+                pass
+
+        # 3. Fall back to numeric power
+        power = self._resolve_opponent_power(opponent_name, llm_estimate)
+        return "", "", power
+
+    async def _resolve_opponent_multi_axis(self, opponent_name: str) -> dict | None:
+        """
+        Resolve opponent progression for multi-axis power system.
+        Checks story cards, graph engine, then NPC minds.
+        Returns axis_id → raw_value dict, or None if not found.
+        """
+        if not opponent_name:
+            return None
+        name_lower = opponent_name.lower()
+
+        # 1. Story cards
+        for card in self._story_cards:
+            if hasattr(card, 'card_type') and getattr(card.card_type, 'value', str(card.card_type)).upper() == "NPC":
+                if card.name.lower() == name_lower or name_lower in card.name.lower():
+                    if isinstance(card.content, dict):
+                        prog = card.content.get("progression")
+                        if prog and isinstance(prog, dict):
+                            return prog   # {axis_id: {raw_value: N}, ...}
+
+        # 2. NPC minds engine
+        if self._npc_minds:
+            prog = self._npc_minds.get_npc_progression(self.campaign_id, opponent_name)
+            if prog:
+                return prog
+
+        # 3. Graph engine
+        if self._graph:
+            try:
+                prog = await self._graph.get_npc_progression(opponent_name)
+                if prog:
+                    return prog
+            except Exception:
+                pass
+
+        return None
 
     async def _evaluate_power_update(self, narrative: str, player_input: str) -> dict | None:
         """Ask the LLM if the player's power level should change based on what just happened.
@@ -791,6 +936,22 @@ class GameSession:
                 npc = self._pending_npc_seed
                 mind.set_thought("feeling", npc.get("personality", "observing"))
                 mind.set_thought("goal", npc.get("goal", "unknown"))
+                # Store realm+tier from NPC seed
+                if npc.get("realm"):
+                    mind.realm = str(npc["realm"])
+                if npc.get("tier"):
+                    mind.tier = self._resolve_tier_display(str(npc["tier"]))
+                # Store multi-axis progression if present
+                npc_prog = npc.get("progression")
+                if npc_prog and isinstance(npc_prog, dict):
+                    for axis_id, prog_data in npc_prog.items():
+                        if isinstance(prog_data, dict):
+                            mind.progression[str(axis_id)] = {
+                                "stage_name": str(prog_data.get("stage_name", "")),
+                                "stage_slug": prog_data.get("stage_slug", ""),
+                                "raw_value": max(0, min(100, int(prog_data.get("raw_value", 50)))),
+                                "sub_stage_slug": prog_data.get("sub_stage_key") or prog_data.get("sub_stage_slug"),
+                            }
                 self._event_store.append(
                     campaign_id=self.campaign_id,
                     event_type=EventType.NPC_THOUGHT,
@@ -798,6 +959,9 @@ class GameSession:
                         "name": mind.name,
                         "thoughts": {k: t.value for k, t in mind.thoughts.items()},
                         "aliases": mind.aliases,
+                        "realm": mind.realm,
+                        "tier": mind.tier,
+                        "progression": mind.progression,
                     },
                     narrative_time_delta=0,
                     location="npc_mind",
@@ -810,7 +974,7 @@ class GameSession:
                 npc_name,
             )
 
-    async def process_action(self, player_input: str, max_tokens: int = 2000) -> AsyncIterator[str]:
+    async def process_action(self, player_input: str, max_tokens: int = 2000, stream_delivery_speed: str = "instant") -> AsyncIterator[str]:
         self._streaming = True
         self._max_tokens = max_tokens
 
@@ -819,7 +983,7 @@ class GameSession:
 
             # Single-call mode for Anthropic: one LLM call does everything
         if self._is_single_call_provider():
-            async for chunk in self._process_action_single_call(player_input, max_tokens):
+            async for chunk in self._process_action_single_call(player_input, max_tokens, stream_delivery_speed):
                 yield chunk
             return
 
@@ -877,7 +1041,7 @@ class GameSession:
             async for chunk in self._handle_combat(player_input, meta):
                 yield chunk
         else:
-            async for chunk in self._handle_narrative(player_input, mode):
+            async for chunk in self._handle_narrative(player_input, mode, stream_delivery_speed=stream_delivery_speed):
                 yield chunk
 
         if mode != NarrativeMode.META:
@@ -907,6 +1071,171 @@ class GameSession:
                     yield chunk
             except Exception:
                 logger.warning("Auto plot generation failed", exc_info=True)
+
+        # ── Rank Entity Evaluation ────────────────────────────────────────────
+        # After narrative, world tick, and auto-plot — evaluate rank advancement.
+        # Uses the accumulated narrative from _history[-1] and player_input.
+        if self._rank_advancer and self._history:
+            full_narrative = self._history[-1].get("content", "")
+            is_combat = mode == NarrativeMode.COMBAT
+            async for chunk in self._evaluate_rank_advance(
+                narrative=full_narrative,
+                player_input=player_input,
+                narrative_seconds_delta=narrative_time,
+                is_combat=is_combat,
+            ):
+                yield chunk
+
+    async def _seed_rank_entities(self) -> None:
+        """
+        Seed rank entities into Neo4j from the PowerSystemConfig.
+        Called once per campaign when a multi-axis power system is active.
+        """
+        if self._rank_seeded or self._rank_graph is None or self._power_system is None:
+            return
+
+        ps_config = self._power_system.progression_engine.config if self._power_system and self._power_system.progression_engine else None
+        if ps_config is None:
+            return
+
+        try:
+            if self._graph:
+                await self._graph.initialize()
+            created = await self._rank_graph.seed_from_config(
+                campaign_id=self.campaign_id,
+                config=ps_config,
+            )
+            if created:
+                # Init PLAYER rank to first entity
+                await self._rank_graph.init_character_rank(
+                    character_id="PLAYER",
+                    campaign_id=self.campaign_id,
+                    start_entity=created[0],
+                )
+                self._rank_seeded = True
+                # Also seed protagonist NPC mind with starting progression
+                first_entity = await self._rank_graph.get_rank_entity(created[0], self.campaign_id)
+                if first_entity and self._npc_minds:
+                    await self._npc_minds.set_npc_realm_tier(
+                        self.campaign_id,
+                        self.protagonist_name or "player",
+                        realm=first_entity.get("axis_name", "Tu Lực"),
+                        tier=created[0],
+                        sub_tier=first_entity.get("tier_value", 5),
+                        axis_id=first_entity.get("axis_id"),
+                        stage_name=first_entity.get("name"),
+                        stage_slug=first_entity.get("stage_key"),
+                        sub_stage_slug=first_entity.get("sub_stage_key"),
+                    )
+                    # Persist protagonist NPC mind to event store
+                    mind = self._npc_minds.get_mind(self.campaign_id, self.protagonist_name or "player")
+                    if mind:
+                        self._event_store.append(
+                            campaign_id=self.campaign_id,
+                            event_type=EventType.NPC_THOUGHT,
+                            payload={
+                                "name": mind.name,
+                                "thoughts": {k: t.value for k, t in mind.thoughts.items()},
+                                "aliases": mind.aliases,
+                                "realm": mind.realm,
+                                "tier": mind.tier,
+                                "progression": mind.progression,
+                            },
+                            narrative_time_delta=0,
+                            location="player_rank_seed",
+                            entities=[mind.name],
+                        )
+                logger.info(
+                    "Seeded %d rank entities for campaign %s, start=%s",
+                    len(created), self.campaign_id, created[0],
+                )
+        except Exception:
+            logger.warning("Failed to seed rank entities for campaign %s", self.campaign_id, exc_info=True)
+
+    async def _evaluate_rank_advance(
+        self,
+        narrative: str,
+        player_input: str,
+        narrative_seconds_delta: int = 0,
+        is_combat: bool = False,
+    ) -> AsyncIterator[str]:
+        """
+        Evaluate rank advancement after a narrative response.
+        Yields SSE payloads for the frontend: [RANK_ADVANCE].
+        """
+        if self._rank_advancer is None or self._rank_graph is None:
+            return
+
+        # Seed on first use (lazy)
+        if not self._rank_seeded:
+            await self._seed_rank_entities()
+
+        try:
+            result = await self._rank_advancer.evaluate(
+                character_id="PLAYER",
+                campaign_id=self.campaign_id,
+                narrative=narrative,
+                player_input=player_input,
+                narrative_seconds_delta=narrative_seconds_delta,
+                is_combat=is_combat,
+            )
+        except Exception:
+            logger.warning("RankAdvancer.evaluate failed", exc_info=True)
+            return
+
+        if result is None:
+            return
+
+        # Apply to graph state
+        try:
+            await self._rank_graph.advance_rank(
+                character_id="PLAYER",
+                campaign_id=self.campaign_id,
+                new_entity_name=result.to_entity_name,
+                narrative_seconds=0,
+            )
+                    # Sync the new rank into NPC Minds for combat comparisons
+            if self._npc_minds:
+                new_entity = await self._rank_graph.get_rank_entity(result.to_entity_name, self.campaign_id)
+                if new_entity:
+                    await self._npc_minds.set_npc_realm_tier(
+                        self.campaign_id,
+                        self.protagonist_name or "player",
+                        realm=result.to_entity_name,
+                        tier=result.to_entity_name,
+                        sub_tier=new_entity.get("tier_value", 5),
+                        axis_id=new_entity.get("axis_id"),
+                        stage_name=new_entity.get("name"),
+                        stage_slug=new_entity.get("stage_key"),
+                        sub_stage_slug=new_entity.get("sub_stage_key"),
+                    )
+                    # Persist updated protagonist NPC mind to event store
+                    mind = self._npc_minds.get_mind(self.campaign_id, self.protagonist_name or "player")
+                    if mind:
+                        self._event_store.append(
+                            campaign_id=self.campaign_id,
+                            event_type=EventType.NPC_THOUGHT,
+                            payload={
+                                "name": mind.name,
+                                "thoughts": {k: t.value for k, t in mind.thoughts.items()},
+                                "aliases": mind.aliases,
+                                "realm": mind.realm,
+                                "tier": mind.tier,
+                                "progression": mind.progression,
+                            },
+                            narrative_time_delta=0,
+                            location="player_rank_advance",
+                            entities=[mind.name],
+                        )
+        except Exception:
+            logger.warning("Failed to advance rank in graph", exc_info=True)
+
+        logger.info(
+            "RANK ADVANCE: %s → %s (trigger=%s)",
+            result.from_entity_name, result.to_entity_name, result.trigger.value,
+        )
+
+        yield f"[RANK_ADVANCE]{json.dumps(result.to_dict())}"
 
     def _resolve_canonical_name(self, short_name: str, all_names: list[str]) -> str:
         """Resolve a potentially short name to its full canonical form.
@@ -965,7 +1294,7 @@ class GameSession:
             logger.warning("Failed to build graph relationship summary", exc_info=True)
             return ""
 
-    async def _handle_narrative(self, player_input: str, mode: NarrativeMode = NarrativeMode.NARRATIVE, combat_outcome: str = "", combat_opponent_name: str = "", combat_npc_power: int = 5) -> AsyncIterator[str]:
+    async def _handle_narrative(self, player_input: str, mode: NarrativeMode = NarrativeMode.NARRATIVE, combat_outcome: str = "", combat_opponent_name: str = "", combat_npc_power: int = 5, stream_delivery_speed: str = "instant") -> AsyncIterator[str]:
         if self._graphiti:
             memory_ctx = await self._memory.build_context_window_async(self.campaign_id)
         else:
@@ -988,6 +1317,10 @@ class GameSession:
             if self._pending_npc_seed and not self._pending_npc_introduced:
                 npc = self._pending_npc_seed
                 npc_name = npc.get('name', 'Unknown')
+                realm = npc.get('realm', '')
+                tier = npc.get('tier', '')
+                power_lvl = npc.get('power_level', 5)
+                power_desc = f"{tier} ({realm})" if realm and tier else f"power level {power_lvl}/10"
                 narrator_hints += (
                     f"\nNEW NPC TO INTRODUCE — YOU MUST USE THIS EXACT NAME: \"{npc_name}\"\n"
                     f"(Weave this character into the scene naturally — "
@@ -998,7 +1331,7 @@ class GameSession:
                     f"Appearance: {npc.get('appearance', '')}\n"
                     f"Personality: {npc.get('personality', '')}\n"
                     f"Goal: {npc.get('goal', '')}\n"
-                    f"Power Level: {npc.get('power_level', 5)}/10"
+                    f"Power Level: {power_desc} — {power_lvl}/10"
                 )
                 # Do NOT mark as introduced yet — we verify after the narrative response
 
@@ -1020,7 +1353,10 @@ class GameSession:
                     lines = ["NPC STATES (what each NPC is currently thinking/feeling):"]
                     for m in minds[:10]:
                         thoughts = ", ".join(f"{k}={t.value}" for k, t in list(m.thoughts.items())[:4])
-                        lines.append(f"- {m.name}: {thoughts}")
+                        realm_tier = ""
+                        if m.realm or m.tier:
+                            realm_tier = f" [{m.realm} / {m.tier}]"
+                        lines.append(f"- {m.name}{realm_tier}: {thoughts}")
                     npc_ctx = "\n".join(lines)
 
             journal_ctx = ""
@@ -1035,8 +1371,16 @@ class GameSession:
                 except Exception:
                     pass
 
+            # Power system context: foundational rules for this world
+            power_system_ctx = ""
+            if self._power_system:
+                power_system_ctx = self._power_system.build_realm_context_for_ai()
+
             system_prompt = self._narrator.build_system_prompt(
                 tone_instructions=self.scenario_tone,
+                protagonist_name=self.protagonist_name,
+                narrative_pov=self.narrative_pov,
+                writing_style=self.writing_style,
                 memory_context=memory_ctx,
                 language=self.language,
                 inventory_context=inventory_ctx,
@@ -1049,6 +1393,7 @@ class GameSession:
                     player_input=player_input,
                     recent_narrative=self._history[-1]["content"][:1000] if self._history else "",
                 ),
+                power_system_context=power_system_ctx,
             )
 
         # Stream narrative to the client as the LLM emits chunks (token / sub-token deltas).
@@ -1059,6 +1404,7 @@ class GameSession:
             player_input, system_prompt, self._history,
             context_window=context_window,
             language=self.language,
+            stream_delivery_speed=stream_delivery_speed,
         ):
             full_response += chunk
             if chunk:
@@ -1080,6 +1426,7 @@ class GameSession:
                 continuation_prompt, system_prompt, continuation_history,
                 context_window=context_window,
                 language=self.language,
+                stream_delivery_speed=stream_delivery_speed,
             ):
                 full_response += chunk
                 if chunk:
@@ -1125,7 +1472,7 @@ class GameSession:
             async for chunk in self._post_narrative_pipeline(clean_response):
                 yield chunk
 
-    async def _process_action_single_call(self, player_input: str, max_tokens: int) -> AsyncIterator[str]:
+    async def _process_action_single_call(self, player_input: str, max_tokens: int, stream_delivery_speed: str = "instant") -> AsyncIterator[str]:
         """Single LLM call mode for Anthropic: narrative + mode + NPCs + entities in one request."""
         # Detect mode first so combat pipeline runs before the main LLM call
         story_ctx = self._history[-1]["content"][:300] if self._history else ""
@@ -1197,13 +1544,35 @@ class GameSession:
 
                 combat_opponent_name = meta.get("opponent_name", "opponent")
                 llm_estimate = meta.get("opponent_power", 3)
+                realm, tier, sub_tier = await self._resolve_opponent_realm_tier(combat_opponent_name, llm_estimate)
                 combat_npc_power = self._resolve_opponent_power(combat_opponent_name, llm_estimate)
-                evaluation = await self._combat.evaluate_action(
-                    action=player_input,
-                    npc_name=combat_opponent_name or "opponent",
-                    npc_power=combat_npc_power,
-                    language=self.language,
-                )
+
+                # Try multi-axis first
+                multi_prog = None
+                if self._power_system and self._power_system.using_new_model():
+                    multi_prog = await self._resolve_opponent_multi_axis(combat_opponent_name)
+
+                if multi_prog and self._combat:
+                    evaluation, outcome = await self._combat.evaluate_multi_axis_action(
+                        action=player_input,
+                        npc_name=combat_opponent_name or "opponent",
+                        npc_progression=multi_prog,
+                        power_system=self._power_system,
+                        action_type_hint=meta.get("action_type", "default"),
+                        language=self.language,
+                    )
+                    realm, tier, sub_tier = "", "", 2
+                    combat_npc_power = 5
+                else:
+                    evaluation = await self._combat.evaluate_action(
+                        action=player_input,
+                        npc_name=combat_opponent_name or "opponent",
+                        npc_power=combat_npc_power,
+                        language=self.language,
+                        npc_realm=realm,
+                        npc_tier=tier,
+                        npc_sub_tier=sub_tier,
+                    )
                 outcome = self._combat.roll_outcome(evaluation.final_quality, combat_npc_power)
                 combat_outcome = outcome.value if hasattr(outcome, "value") else str(outcome)
                 combat_quality = evaluation.final_quality
@@ -1303,7 +1672,10 @@ class GameSession:
                 lines = ["NPC STATES (what each NPC is currently thinking/feeling):"]
                 for m in minds[:10]:
                     thoughts = ", ".join(f"{k}={t.value}" for k, t in list(m.thoughts.items())[:4])
-                    lines.append(f"- {m.name}: {thoughts}")
+                    realm_tier = ""
+                    if m.realm or m.tier:
+                        realm_tier = f" [{m.realm} / {m.tier}]"
+                    lines.append(f"- {m.name}{realm_tier}: {thoughts}")
                 npc_ctx = "\n".join(lines)
 
         journal_ctx = ""
@@ -1318,8 +1690,16 @@ class GameSession:
             except Exception:
                 pass
 
+        # Power system context: foundational rules for this world
+        power_system_ctx = ""
+        if self._power_system:
+            power_system_ctx = self._power_system.build_realm_context_for_ai()
+
         static_prompt, dynamic_prompt = self._narrator.build_system_prompt_parts(
             tone_instructions=self.scenario_tone,
+            protagonist_name=self.protagonist_name,
+            narrative_pov=self.narrative_pov,
+            writing_style=self.writing_style,
             memory_context=memory_ctx,
             language=self.language,
             inventory_context=inventory_ctx,
@@ -1332,6 +1712,7 @@ class GameSession:
                 player_input=player_input,
                 recent_narrative=self._history[-1]["content"][:1000] if self._history else "",
             ),
+            power_system_context=power_system_ctx,
         )
 
         # Collect canonical names for entity extraction
@@ -1382,6 +1763,7 @@ class GameSession:
                 continuation_prompt, system_prompt, continuation_history,
                 context_window=context_window,
                 language=self.language,
+                stream_delivery_speed=stream_delivery_speed,
             ):
                 full_response += chunk
                 yield chunk
@@ -1455,18 +1837,21 @@ class GameSession:
                         for key, value in npc_data.get("thoughts", {}).items():
                             if value:
                                 mind.set_thought(key, str(value))
-                        self._event_store.append(
-                            campaign_id=self.campaign_id,
-                            event_type=EventType.NPC_THOUGHT,
-                            payload={
-                                "name": mind.name,
-                                "thoughts": {k: t.value for k, t in mind.thoughts.items()},
-                                "aliases": mind.aliases,
-                            },
-                            narrative_time_delta=0,
-                            location="npc_mind",
-                            entities=[mind.name],
-                        )
+                            self._event_store.append(
+                                campaign_id=self.campaign_id,
+                                event_type=EventType.NPC_THOUGHT,
+                                payload={
+                                    "name": mind.name,
+                                    "thoughts": {k: t.value for k, t in mind.thoughts.items()},
+                                    "aliases": mind.aliases,
+                                    "realm": mind.realm,
+                                    "tier": mind.tier,
+                                    "progression": mind.progression,
+                                },
+                                narrative_time_delta=0,
+                                location="npc_mind",
+                                entities=[mind.name],
+                            )
                 except Exception:
                     logger.warning("Single-call NPC thought processing failed", exc_info=True)
 
@@ -1619,6 +2004,9 @@ class GameSession:
                         "name": mind.name,
                         "thoughts": {k: t.value for k, t in mind.thoughts.items()},
                         "aliases": mind.aliases,
+                        "realm": mind.realm,
+                        "tier": mind.tier,
+                        "progression": mind.progression,
                     },
                     narrative_time_delta=0,
                     location="npc_mind",
@@ -1764,12 +2152,22 @@ class GameSession:
                 if self._pending_npc_seed:
                     existing_names.append(self._pending_npc_seed.get("name", ""))
 
+                # Build power system hint if available
+                power_hint = ""
+                if self._power_system:
+                    power_hint = self._power_system.build_npc_tier_hint_for_ai(
+                        max_realm_order=max(1, self._turn_count // 5),
+                        max_tier_index=min(2, self._turn_count // 3),
+                    )
+
                 npc = await self._plot_generator.generate_npc(
                     safe_context,
                     language=self.language,
                     recent_narrative=recent_narrative,
                     existing_npc_names=existing_names,
                     tone_instructions=tone,
+                    power_system_hint=power_hint,
+                    narrative_turns=self._turn_count,
                 )
                 if npc is None:
                     # LLM decided it doesn't make sense right now — skip
@@ -1848,14 +2246,46 @@ class GameSession:
 
             opponent_name = meta.get("opponent_name", "opponent")
             llm_estimate = meta.get("opponent_power", 3)
-            npc_power = self._resolve_opponent_power(opponent_name, llm_estimate)
-            evaluation = await self._combat.evaluate_action(
-                action=player_input,
-                npc_name=opponent_name or "opponent",
-                npc_power=npc_power,
-                language=self.language,
-            )
-            outcome = self._combat.roll_outcome(evaluation.final_quality, npc_power)
+            action_type_hint = meta.get("action_type", "default")  # "combat", "social", "wealth", etc.
+
+            # Try multi-axis first
+            multi_prog = None
+            if self._power_system and self._power_system.using_new_model():
+                multi_prog = await self._resolve_opponent_multi_axis(opponent_name)
+
+            if multi_prog and self._combat:
+                # Multi-axis path: use axis-appropriate combat resolution
+                evaluation, outcome = await self._combat.evaluate_multi_axis_action(
+                    action=player_input,
+                    npc_name=opponent_name or "opponent",
+                    npc_progression=multi_prog,
+                    power_system=self._power_system,
+                    action_type_hint=action_type_hint,
+                    language=self.language,
+                )
+                npc_realm, npc_tier, npc_sub_tier = "", "", 2
+                npc_power = 5  # computed internally by evaluate_multi_axis_action
+            else:
+                # Legacy single-axis path
+                npc_realm, npc_tier, npc_sub_tier = await self._resolve_opponent_realm_tier(
+                    opponent_name, llm_estimate
+                )
+                npc_power = self._resolve_opponent_power(opponent_name, llm_estimate)
+                evaluation = await self._combat.evaluate_action(
+                    action=player_input,
+                    npc_name=opponent_name or "opponent",
+                    npc_power=npc_power,
+                    language=self.language,
+                    npc_realm=npc_realm,
+                    npc_tier=npc_tier,
+                    npc_sub_tier=npc_sub_tier,
+                )
+                if self._power_system and npc_realm:
+                    outcome = self._combat.roll_outcome_with_realm(
+                        evaluation.final_quality, npc_realm, npc_tier, self._power_system, npc_sub_tier
+                    )
+                else:
+                    outcome = self._combat.roll_outcome(evaluation.final_quality, npc_power)
             outcome_value = outcome.value if hasattr(outcome, "value") else str(outcome)
 
             self._event_store.append(
@@ -1866,6 +2296,8 @@ class GameSession:
                     "quality": evaluation.final_quality,
                     "opponent_name": opponent_name,
                     "opponent_power": npc_power,
+                    "opponent_realm": npc_realm,
+                    "opponent_tier": npc_tier,
                     "player_power": self._player_power,
                 },
                 narrative_time_delta=0,
@@ -1875,26 +2307,28 @@ class GameSession:
             if opponent_name:
                 self._known_opponent_powers[opponent_name.lower()] = npc_power
 
+            # Power description with realm+tier
+            power_desc = f"{npc_tier} ({npc_realm}) — power {npc_power}/10" if npc_realm and npc_tier else f"power {npc_power}/10"
             # Prepend outcome hint for narrator (localized)
             combat_hint_map = {
                 "pt-br": {
-                    "CRIT_SUCCESS": f"[Combate: {opponent_name} (poder {npc_power}) vs Jogador (poder {self._player_power}) → SUCESSO CRÍTICO]",
-                    "SUCCESS":      f"[Combate: {opponent_name} (poder {npc_power}) vs Jogador (poder {self._player_power}) → SUCESSO]",
-                    "FAIL":         f"[Combate: {opponent_name} (poder {npc_power}) vs Jogador (poder {self._player_power}) → FALHA]",
-                    "CRIT_FAIL":    f"[Combate: {opponent_name} (poder {npc_power}) vs Jogador (poder {self._player_power}) → FALHA CRÍTICA]",
+                    "CRIT_SUCCESS": f"[Combate: {opponent_name} ({power_desc}) vs Jogador → SUCESSO CRÍTICO]",
+                    "SUCCESS":      f"[Combate: {opponent_name} ({power_desc}) vs Jogador → SUCESSO]",
+                    "FAIL":         f"[Combate: {opponent_name} ({power_desc}) vs Jogador → FALHA]",
+                    "CRIT_FAIL":    f"[Combate: {opponent_name} ({power_desc}) vs Jogador → FALHA CRÍTICA]",
                 },
                 "pt": {
-                    "CRIT_SUCCESS": f"[Combate: {opponent_name} (poder {npc_power}) vs Jogador (poder {self._player_power}) → SUCESSO CRÍTICO]",
-                    "SUCCESS":      f"[Combate: {opponent_name} (poder {npc_power}) vs Jogador (poder {self._player_power}) → SUCESSO]",
-                    "FAIL":         f"[Combate: {opponent_name} (poder {npc_power}) vs Jogador (poder {self._player_power}) → FALHA]",
-                    "CRIT_FAIL":    f"[Combate: {opponent_name} (poder {npc_power}) vs Jogador (poder {self._player_power}) → FALHA CRÍTICA]",
+                    "CRIT_SUCCESS": f"[Combate: {opponent_name} ({power_desc}) vs Jogador → SUCESSO CRÍTICO]",
+                    "SUCCESS":      f"[Combate: {opponent_name} ({power_desc}) vs Jogador → SUCESSO]",
+                    "FAIL":         f"[Combate: {opponent_name} ({power_desc}) vs Jogador → FALHA]",
+                    "CRIT_FAIL":    f"[Combate: {opponent_name} ({power_desc}) vs Jogador → FALHA CRÍTICA]",
                 },
             }
             default_hints = {
-                "CRIT_SUCCESS": f"[Combat: {opponent_name} (power {npc_power}) vs Player (power {self._player_power}) → CRIT_SUCCESS]",
-                "SUCCESS":      f"[Combat: {opponent_name} (power {npc_power}) vs Player (power {self._player_power}) → SUCCESS]",
-                "FAIL":         f"[Combat: {opponent_name} (power {npc_power}) vs Player (power {self._player_power}) → FAIL]",
-                "CRIT_FAIL":    f"[Combat: {opponent_name} (power {npc_power}) vs Player (power {self._player_power}) → CRIT_FAIL]",
+                "CRIT_SUCCESS": f"[Combat: {opponent_name} ({power_desc}) vs Player → CRIT_SUCCESS]",
+                "SUCCESS":      f"[Combat: {opponent_name} ({power_desc}) vs Player → SUCCESS]",
+                "FAIL":         f"[Combat: {opponent_name} ({power_desc}) vs Player → FAIL]",
+                "CRIT_FAIL":    f"[Combat: {opponent_name} ({power_desc}) vs Player → CRIT_FAIL]",
             }
             lang_map = combat_hint_map.get(self.language, default_hints)
             combat_hint = lang_map.get(outcome_value, default_hints.get(outcome_value, f"[{outcome_value}]"))
@@ -1991,18 +2425,27 @@ class GameSession:
             '{\n  "entities": [\n    {"name": "<full name>", "type": "NPC|LOCATION|FACTION|ITEM|EVENT", '
             '"attributes": {\n      "description": "<1-2 sentence description in ' + lang_name_val + ' if available>",\n'
             '      "power_level": <int 1-10 for NPCs only>,\n'
-            '      "location_type": "<city|cave|forest|tavern|etc for LOCATION only>",\n'
-            '      "faction_type": "<guild|order|kingdom|etc for FACTION only>",\n'
-            '      "item_type": "<weapon|armor|potion|key|etc for ITEM only>"\n'
+            '      "realm": "<display name e.g. Tu Chân, Luyện Khí — write in ' + lang_name_val + '>",\n'
+            '      "tier": "<display name e.g. Trúc Cơ, Hấp Khí Hậu Kỳ — write in ' + lang_name_val + '>",\n'
+            '      "sub_tier": "<1|2|3 for early/mid/late>",\n'
+            '      "location_type": "<city|thành thị|cave|hang động|forest|rừng — write in ' + lang_name_val + '>",\n'
+            '      "faction_type": "<guild|hội|sect|môn phái|kingdom|vương quốc — write in ' + lang_name_val + '>",\n'
+            '      "item_type": "<weapon|vũ khí|armor|giáp|potion|dược phẩm — write in ' + lang_name_val + '>",\n'
+            '      "rarity": "<common|hiếm|rare|cực hiếm|epic|cực phẩm|legendary|truyền thuyết — write in ' + lang_name_val + '>",\n'
+            '      "role": "<leader|lãnh đạo|elder|trưởng lão|merchant|thương nhân — write in ' + lang_name_val + '>"\n'
             '    }\n    }\n  ],\n'
             '  "relationships": [{"source": "<full name>", "target": "<full name>", "rel_type": "<MET|KNOWS|ALLIED_WITH|GUARDS|OWNS|LOCATED_IN|etc>"}]\n'
             '}\n\n'
-            "IMPORTANT: Always use the FULL canonical name for each entity. "
-            "Never abbreviate to just a first name or last name. "
-            "Only include entities explicitly named in the narrative text. "
-            "Write ALL descriptions and attribute values IN " + lang_upper + ". "
-            "Fill in 'attributes' with any descriptive detail you can infer from the narrative. "
-            "If no attributes can be inferred, use an empty object {}."
+            "CRITICAL RULES:\n"
+            "- name: ALWAYS use the full canonical DISPLAY NAME — NEVER use underscore slugs like 'van_hong', 'dungeon_1', or 'hệ_thống_đội_quân'. "
+            "Write names naturally: 'Vân Hồng', 'Thiên Cung Động', 'Hệ Thống Đội Quân'.\n"
+            "- realm/tier: ALWAYS use DISPLAY NAMES from the power system, not slug keys. "
+            "E.g. 'Tu Chân', 'Trúc Cơ Kỳ', 'Hấp Khí Trung Kỳ' — NOT 'tu_chan', 'truc_co'.\n"
+            "- location_type/faction_type/item_type: use display names in " + lang_name_val + " like 'Thành Thị', 'Môn Phái', 'Vũ Khí' — NOT 'city', 'sect', 'weapon'.\n"
+            "- Write ALL attribute values in " + lang_upper + ".\n"
+            "Only include entities explicitly named in the narrative text.\n"
+            "If no attributes can be inferred, use an empty object {}.\n"
+            + (self._power_system.build_realm_context_for_ai() if self._power_system else "")
             + name_hint
         )
 

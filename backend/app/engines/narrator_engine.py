@@ -33,6 +33,69 @@ _LANGUAGE_INSTRUCTIONS = {
     "pt-br": "Responda em português brasileiro (pt-br).",
 }
 
+# ===== POV (Ngôi kể) — đại từ nhân xưng dùng khi kể chuyện =====
+_POV_INSTRUCTIONS = {
+    "first_person": {
+        "en": "Use FIRST PERSON narration ('I', 'my', 'me'). The protagonist speaks and acts as 'I'. Write from the protagonist's direct perspective.",
+        "vi": "Dùng NGÔI THỨ NHẤT ('tôi', 'của tôi', 'với tôi'). Nhân vật chính nói và hành động như 'tôi'. Viết từ góc nhìn trực tiếp của nhân vật chính.",
+        "pt-br": "Use a narração em PRIMEIRA PESSOA ('eu', 'meu', 'mim'). O protagonista fala e age como 'eu'.",
+    },
+    "second_person": {
+        "en": "Use SECOND PERSON narration ('you', 'your'). Address the reader/player directly as the protagonist.",
+        "vi": "Dùng NGÔI THỨ HAI ('bạn', 'của bạn'). Nói trực tiếp với người đọc/người chơi như nhân vật chính.",
+        "pt-br": "Use a narração em SEGUNDA PESSOA ('você', 'seu'). Dirija-se diretamente ao leitor/jogador.",
+    },
+    "third_person": {
+        "en": "Use THIRD PERSON narration ('he/she/they', 'his/her/their'). Write about the protagonist from outside.",
+        "vi": "Dùng NGÔI THỨ BA ('hắn/cô ấy/họ', 'của hắn/cô ấy'). Viết về nhân vật chính từ bên ngoài.",
+        "pt-br": "Use a narração em TERCEIRA PESSOA ('ele/ela', 'dele/dela'). Conte sobre o protagonista de fora.",
+    },
+    "omniscient": {
+        "en": "Use OMNISCIENT narration. You see and know everything — the protagonist's thoughts, NPC's secrets, world events simultaneously. Jump perspectives freely.",
+        "vi": "Dùng NGÔI TOÀN BIẾT. Bạn nhìn và biết mọi thứ — suy nghĩ nhân vật chính, bí mật NPC, sự kiện thế giới đồng thời. Nhảy góc nhìn tự do.",
+        "pt-br": "Use narração ONISCIENTE. Você vê e sabe de tudo — pensamentos, segredos, eventos mundiais simultaneamente.",
+    },
+    "multiple_pov": {
+        "en": "Use MULTIPLE POV narration. Shift between different characters' perspectives throughout the scene. Show what different characters think and feel.",
+        "vi": "Dùng NGÔI ĐA NHÂN VẬT. Chuyển đổi giữa các góc nhìn khác nhau trong suốt cảnh. Cho thấy nhân vật khác nghĩ và cảm nhận gì.",
+        "pt-br": "Use narração de MÚLTIPLAS PONTOS DE VISTA. Alterne entre perspectivas de diferentes personagens.",
+    },
+}
+
+# ===== Writing Style (Phong cách viết) =====
+_WRITING_STYLE_INSTRUCTIONS = {
+    "chinh_thong": {
+        "en": "STYLE: Orthodox — formal, precise, literary. Use complete sentences, rich vocabulary, balanced pacing. Suitable for epic narratives.",
+        "vi": "PHONG CÁCH: Chính Thống — trang trọng, chính xác, văn chương. Dùng câu hoàn chỉnh, từ vựng phong phú, nhịp điệu cân bằng. Phù hợp cho sử thi.",
+        "pt-br": "ESTILO: Ortodoxo — formal, preciso, literário. Frases completas, vocabulário rico, ritmo equilibrado.",
+    },
+    "hao_sang": {
+        "en": "STYLE: Heroic Splendor — grand, sweeping, larger-than-life. Exaggerate conflicts, elevate heroes, dramatic declarations. Like classical epics.",
+        "vi": "PHONG CÁCH: Hào Sảng — hùng tráng, mãnh liệt, vượt đời thực. Phóng đại xung đột, tôn anh hùng, tuyên bố kịch tính. Như sử thi cổ điển.",
+        "pt-br": "ESTILO: Esplendor Heróico — grandioso, dramático, maior que a vida. Conflitos exagerados, heróis elevados.",
+    },
+    "lanh_khot": {
+        "en": "STYLE: Cold & Brutal — detached, terse, unflinching. No sentimentality. Consequences are immediate and severe. Watch suffering unfold without commentary.",
+        "vi": "PHONG CÁCH: Lãnh Khốc — khách quan, ngắn gọn, không khoan nhượng. Không cảm xúc. Hậu quả tức thì và nghiêm khắc. Chứng kiến đau khổ không bình luận.",
+        "pt-br": "ESTILO: Frio & Brutal — objetivo, breve, implacável. Sem sentimentalismo. Consequências imediatas.",
+    },
+    "tho_mong": {
+        "en": "STYLE: Dreamlike & Poetic — lyrical, atmospheric, contemplative. Use metaphor, sensory detail, emotional undercurrent. Let moments breathe.",
+        "vi": "PHONG CÁCH: Thơ Mộng — trữ tình, giàu không khí, suy tư. Dùng ẩn dụ, chi tiết giác quan, dòng cảm xúc ngầm. Để khoảnh khắc thở.",
+        "pt-br": "ESTILO: Onírico & Poético — lírico, atmosférico, contemplativo. Metáforas, detalhes sensoriais, emoção subjacente.",
+    },
+    "hai_huoc": {
+        "en": "STYLE: Humorous & Light — witty, playful, self-aware. Include light jokes, pop culture references, character's internal commentary. Keep tension but stay entertaining.",
+        "vi": "PHONG CÁCH: Hài Hước — hóm hỉnh, vui vẻ, tự nhận thức. Thêm trò đùa nhẹ, tham chiếu văn hóa đại chúng, bình luận nội tâm. Giữ căng thẳng nhưng vui vẻ.",
+        "pt-br": "ESTILO: Humorístico & Leve — espirituoso, brincalhão, autoconsciente. Piadas leves, referências culturais.",
+    },
+    "kich_tinh": {
+        "en": "STYLE: Dramatic Tension — suspenseful, fast-paced, cliffhangers. Build tension constantly. End scenes at critical moments. Reveal secrets dramatically.",
+        "vi": "PHONG CÁCH: Kịch Tính — hồi hồp, nhanh, cliffhanger. Xây dựng căng thẳng liên tục. Kết thúc cảnh tại khoảnh khắc quan trọng. Tiết lộ bí mật một cách kịch tính.",
+        "pt-br": "ESTILO: Tensão Dramática — suspense, ritmo acelerado, cliffhangers. Construa tensão constantemente.",
+    },
+}
+
 
 class NarratorEngine:
     def __init__(self, llm):
@@ -48,7 +111,8 @@ class NarratorEngine:
                 "content": (
                     "Classify the player's action and return ONLY JSON: "
                     '{"mode": "NARRATIVE|COMBAT|META", "ambush": bool, "narrative_time_seconds": int, '
-                    '"opponent_name": str, "opponent_power": int}. '
+                    '"opponent_name": str, "opponent_power": int, '
+                    '"action_type": "combat"|"social"|"wealth"|"investigate"|"default"}. '
                     "COMBAT: action initiates or continues a fight. "
                     "META: player speaks to the AI narrator directly (out of character). "
                     "NARRATIVE: everything else (exploration, dialogue, travel, etc.). "
@@ -58,7 +122,11 @@ class NarratorEngine:
                     "opponent_power: if COMBAT, estimate the opponent's power level 1-10. "
                     "If a WORLD POWER SCALE is provided in the context, use those NPCs as anchors "
                     "to calibrate the opponent relative to the world. "
-                    "Use 3 if truly uncertain. 0 if not COMBAT."
+                    "Use 3 if truly uncertain. 0 if not COMBAT. "
+                    "action_type: the relevant power axis for resolution — "
+                    '"combat" for physical fighting, "social" for persuasion/manipulation, '
+                    '"wealth" for buying/bribing, "investigate" for deduction, '
+                    '"default" for general narrative actions.'
                     + context_hint
                 ),
             },
@@ -90,12 +158,18 @@ class NarratorEngine:
         except (TypeError, ValueError):
             opponent_power = 3
 
+        action_type = str(data.get("action_type", "default")).strip().lower()
+        valid_action_types = {"combat", "social", "wealth", "investigate", "default"}
+        if action_type not in valid_action_types:
+            action_type = "default"
+
         return mode, {
             "mode": mode.value,
             "ambush": bool(data.get("ambush", False)),
             "narrative_time_seconds": seconds,
             "opponent_name": opponent_name,
             "opponent_power": opponent_power,
+            "action_type": action_type,
         }
 
     @staticmethod
@@ -188,9 +262,12 @@ class NarratorEngine:
 
     def build_system_prompt(
         self,
-        tone_instructions: str,
-        memory_context: str,
-        language: str,
+        tone_instructions: str = "",
+        protagonist_name: str = "",
+        narrative_pov: str = "first_person",
+        writing_style: str = "chinh_thong",
+        memory_context: str = "",
+        language: str = "en",
         inventory_context: str = "",
         max_tokens: int = 2000,
         narrator_hints: str = "",
@@ -198,16 +275,31 @@ class NarratorEngine:
         npc_context: str = "",
         journal_context: str = "",
         story_cards_context: str = "",
+        power_system_context: str = "",
     ) -> str:
         lang_instruction = _LANGUAGE_INSTRUCTIONS.get(
             language,
             f"Respond in the language: {lang_name(language)}.",
         )
+        pov_key = narrative_pov if narrative_pov in _POV_INSTRUCTIONS else "first_person"
+        pov_instruction = _POV_INSTRUCTIONS[pov_key].get(
+            language, _POV_INSTRUCTIONS[pov_key]["en"]
+        )
+        style_key = writing_style if writing_style in _WRITING_STYLE_INSTRUCTIONS else "chinh_thong"
+        style_instruction = _WRITING_STYLE_INSTRUCTIONS[style_key].get(
+            language, _WRITING_STYLE_INSTRUCTIONS[style_key]["en"]
+        )
         sections = [
             f"You are an AI narrator for an interactive RPG story. {lang_instruction}",
         ]
+        if protagonist_name:
+            sections.append(f"\nPROTAGONIST NAME: {protagonist_name}")
+        sections.append(f"\nNARRATIVE PERSPECTIVE:\n{pov_instruction}")
+        sections.append(f"\n{style_instruction}")
         if tone_instructions:
             sections.append(f"\nTONE AND STYLE:\n{tone_instructions}")
+        if power_system_context:
+            sections.append(f"\nPOWER SYSTEM:\n{power_system_context}")
         if memory_context:
             sections.append(f"\nWORLD MEMORY:\n{memory_context}")
         if inventory_context:
@@ -228,9 +320,12 @@ class NarratorEngine:
 
     def build_system_prompt_parts(
         self,
-        tone_instructions: str,
-        memory_context: str,
-        language: str,
+        tone_instructions: str = "",
+        protagonist_name: str = "",
+        narrative_pov: str = "first_person",
+        writing_style: str = "chinh_thong",
+        memory_context: str = "",
+        language: str = "en",
         inventory_context: str = "",
         max_tokens: int = 2000,
         narrator_hints: str = "",
@@ -238,25 +333,38 @@ class NarratorEngine:
         npc_context: str = "",
         journal_context: str = "",
         story_cards_context: str = "",
+        power_system_context: str = "",
     ) -> tuple[str, str]:
         """Build system prompt split into (static, dynamic) parts for prompt caching.
 
-        Static part: role + language + tone + narrator rules (fixed per scenario).
+        Static part: role + language + pov + style + tone + narrator rules + power system (fixed per scenario).
         Dynamic part: memory, inventory, NPCs, journal, hints, graph, story cards (changes per action).
-        No artificial character limit — the context budget is managed at the
-        session level based on the provider's actual context window.
         """
         lang_instruction = _LANGUAGE_INSTRUCTIONS.get(
             language,
             f"Respond in the language: {lang_name(language)}.",
+        )
+        pov_key = narrative_pov if narrative_pov in _POV_INSTRUCTIONS else "first_person"
+        pov_instruction = _POV_INSTRUCTIONS[pov_key].get(
+            language, _POV_INSTRUCTIONS[pov_key]["en"]
+        )
+        style_key = writing_style if writing_style in _WRITING_STYLE_INSTRUCTIONS else "chinh_thong"
+        style_instruction = _WRITING_STYLE_INSTRUCTIONS[style_key].get(
+            language, _WRITING_STYLE_INSTRUCTIONS[style_key]["en"]
         )
 
         # Static: same for every action in this scenario
         static_sections = [
             f"You are an AI narrator for an interactive RPG story. {lang_instruction}",
         ]
+        if protagonist_name:
+            static_sections.append(f"\nPROTAGONIST NAME: {protagonist_name}")
+        static_sections.append(f"\nNARRATIVE PERSPECTIVE:\n{pov_instruction}")
+        static_sections.append(f"\n{style_instruction}")
         if tone_instructions:
             static_sections.append(f"\nTONE AND STYLE:\n{tone_instructions}")
+        if power_system_context:
+            static_sections.append(f"\nPOWER SYSTEM:\n{power_system_context}")
         static_sections.append(self._build_narrator_rules(max_tokens, language))
         static_part = "\n".join(static_sections)
 
@@ -343,7 +451,30 @@ class NarratorEngine:
         history: list[dict],
         context_window: int = 64_000,
         language: str = "en",
+        stream_delivery_speed: str = "instant",
     ) -> AsyncIterator[str]:
+        """Stream narrative with optional delivery speed control.
+
+        stream_delivery_speed controls how fast chunks are emitted from this
+        generator (not how fast the LLM generates — that's always full speed):
+          - instant  : chunks emitted as fast as possible (no throttle)
+          - fast     : ~5ms delay between chunks
+          - normal   : ~20ms delay between chunks
+          - slow     : ~100ms delay between chunks
+          - typewriter: ~60ms delay (word-grouped for authentic feel)
+        """
+        import asyncio
+
+        _DELIVERY_DELAYS = {
+            "instant":     0.0,
+            "fast":        0.005,
+            "normal":      0.02,
+            "slow":        0.1,
+            "typewriter":  0.065,
+        }
+        delay = _DELIVERY_DELAYS.get(stream_delivery_speed, 0.0)
+        is_typewriter = stream_delivery_speed == "typewriter"
+
         system_tokens = estimate_tokens(system_prompt)
         history_slice = self._dynamic_history_slice(history, context_window, system_tokens)
         messages = [{"role": "system", "content": system_prompt}]
@@ -356,11 +487,12 @@ class NarratorEngine:
             "System prompt (%d tokens, %d chars):\n%s\n"
             "History slice: %d messages (of %d total)\n"
             "Player input: %s\n"
-            "Context window: %d",
+            "Context window: %d, stream_delivery_speed: %s",
             system_tokens, len(system_prompt), system_prompt,
             len(history_slice), len(history),
             player_input,
             context_window,
+            stream_delivery_speed,
         )
         if logger.isEnabledFor(logging.DEBUG):
             for idx, msg in enumerate(history_slice):
@@ -372,12 +504,63 @@ class NarratorEngine:
                 )
 
         full_response = ""
-        try:
-            async for chunk in self._llm.stream(messages=messages):
-                full_response += chunk
-                yield chunk
-        except Exception:
-            yield self._fallback_narrative(player_input, language=language)
+
+        if delay <= 0:
+            # No throttle — fast path, emit chunks directly as they arrive
+            try:
+                async for chunk in self._llm.stream(messages=messages):
+                    full_response += chunk
+                    yield chunk
+            except Exception:
+                yield self._fallback_narrative(player_input, language=language)
+        else:
+            # Throttled path: collect chunks into a word buffer and release
+            # word groups at a fixed interval — gives authentic typewriter pacing.
+            word_buf = ""
+            last_word_boundary = 0
+            pos = 0
+
+            try:
+                async for chunk in self._llm.stream(messages=messages):
+                    full_response += chunk
+                    word_buf += chunk
+
+                    if is_typewriter:
+                        # Emit at word boundaries (space, newline, punctuation)
+                        # Find the last safe break point
+                        emit_up_to = len(word_buf)
+                        for check_pos in range(len(word_buf) - 1, -1, -1):
+                            ch = word_buf[check_pos]
+                            if ch in (' ', '\n', '\t', '.', ',', '!', '?', ';', ':', '—', '-'):
+                                emit_up_to = check_pos + 1
+                                break
+
+                        if emit_up_to > last_word_boundary:
+                            chunk_to_emit = word_buf[last_word_boundary:emit_up_to]
+                            last_word_boundary = emit_up_to
+                            if chunk_to_emit:
+                                await asyncio.sleep(delay)
+                                yield chunk_to_emit
+                    else:
+                        # Simple time-based throttle: emit whatever we have after delay
+                        await asyncio.sleep(delay)
+                        to_emit = word_buf[last_word_boundary:]
+                        last_word_boundary = len(word_buf)
+                        if to_emit:
+                            yield to_emit
+
+            except Exception:
+                # Flush any remaining buffer before fallback
+                remaining = word_buf[last_word_boundary:]
+                if remaining:
+                    yield remaining
+                yield self._fallback_narrative(player_input, language=language)
+                return
+
+            # Drain any remaining buffered text after stream completes
+            remaining = word_buf[last_word_boundary:]
+            if remaining:
+                yield remaining
 
         # Debug logging: log full response
         logger.debug(
@@ -534,10 +717,35 @@ class NarratorEngine:
         text = player_input.lower()
 
         combat_markers = (
-            "attack", "strike", "slash", "parry", "fight", "combat", "duel",
-            "shoot", "stab", "counter", "ambush", "battle",
+            "fight", "attack", "kill", "hit", "strike", "punch", "kick",
+            "defend", "block", "dodge", "parry", "shoot", "stab",
+            "battle", "combat", "war", "warfare", "destroy", "eliminate",
         )
+        social_markers = (
+            "persuade", "convince", "manipulate", "bribe", "threaten", "intimidate",
+            "seduce", "negotiate", "charm", "deceive", "lie", "argue", "debate",
+            "inspire", "command", "order",
+        )
+        wealth_markers = ("buy", "purchase", "pay", "afford", "bribe", "bid", "bet", "invest", "own", "rich")
+        investigate_markers = ("investigate", "deduce", "analyze", "examine", "search", "inspect", "discover", "find", "notice", "observe")
         meta_markers = ("ooc", "meta", "as ai", "narrator", "system")
+
+        combat = any(w in text for w in combat_markers)
+        social = any(w in text for w in social_markers)
+        wealth = any(w in text for w in wealth_markers)
+        investigate = any(w in text for w in investigate_markers)
+
+        if combat:
+            mode = NarrativeMode.COMBAT
+            action_type = "combat"
+        elif social:
+            action_type = "social"
+        elif wealth:
+            action_type = "wealth"
+        elif investigate:
+            action_type = "investigate"
+        else:
+            action_type = "default"
 
         mode = NarrativeMode.NARRATIVE
         if any(marker in text for marker in combat_markers):
@@ -552,6 +760,7 @@ class NarratorEngine:
             "narrative_time_seconds": seconds,
             "opponent_name": "",
             "opponent_power": 3,
+            "action_type": action_type,
         }
 
     @staticmethod

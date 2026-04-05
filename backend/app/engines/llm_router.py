@@ -105,8 +105,11 @@ class LLMRouter:
                 max_tokens=max_tokens,
                 **call_kwargs,
             )
-            return response.choices[0].message.content
-        except Exception:
+            content = response.choices[0].message.content
+            if content is None:
+                raise ValueError("LLM returned empty content (None)")
+            return content
+        except Exception as primary_err:
             if self.config.fallback_provider and self.config.fallback_model:
                 fallback_model = self._build_model_string(
                     self.config.fallback_provider, self.config.fallback_model
