@@ -47,7 +47,8 @@ _combat = CombatEngine(llm=_llm)
 _plot_generator = PlotGenerator(llm=_llm)
 _npc_minds = NpcMindEngine(llm=_llm)
 _inventory = InventoryEngine(event_store=_event_store)
-
+from app.engines.choice_generator import ChoiceGenerator
+_choice_generator = ChoiceGenerator(llm=_llm)
 _sessions: dict[str, GameSession] = {}
 _graph_engines: dict = {}
 
@@ -149,7 +150,7 @@ def _ensure_session(campaign_id: str) -> GameSession:
     if graphiti:
         _memory.set_graphiti(graphiti)
 
-    _sessions[campaign_id] = GameSession(
+    session = GameSession(
         campaign_id=campaign_id,
         scenario_tone=tone,
         protagonist_name=protagonist_name,
@@ -167,11 +168,13 @@ def _ensure_session(campaign_id: str) -> GameSession:
         graphiti_engine=graphiti,
         plot_generator=_plot_generator,
         inventory_engine=_inventory,
+        choice_generator=_choice_generator,
         opening_narrative=opening,
         story_cards=story_cards,
         power_system=power_system,
     )
-    return _sessions[campaign_id]
+    _sessions[campaign_id] = session
+    return session
 
 _graphiti_engine = None
 
@@ -182,7 +185,12 @@ def _get_graphiti_engine():
         return _graphiti_engine
     try:
         from app.engines.graphiti_engine import GraphitiEngine
-        _graphiti_engine = GraphitiEngine(settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password)
+        _graphiti_engine = GraphitiEngine(
+            settings.neo4j_uri,
+            settings.neo4j_user,
+            settings.neo4j_password,
+            openai_key=settings.openai_api_key,
+        )
         return _graphiti_engine
     except Exception:
         logger.info("Graphiti not available, running without temporal graph")
@@ -424,6 +432,9 @@ async def get_pending_action(campaign_id: str, current_user: AuthUser = Depends(
 @router.get("/{campaign_id}/history")
 async def get_history(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
     """Return PLAYER_ACTION and NARRATOR_RESPONSE events to rebuild chat UI."""
+    # Must verify campaign still exists — otherwise deleted campaigns return empty messages
+    # and the client mistakes them for a brand-new play session (shows pre-game Continue).
+    _require_campaign_access(campaign_id, current_user)
     events = _event_store.get_by_type(campaign_id, EventType.PLAYER_ACTION) + \
              _event_store.get_by_type(campaign_id, EventType.NARRATOR_RESPONSE)
     events.sort(key=lambda e: e.created_at)
@@ -488,6 +499,34 @@ async def rewind(campaign_id: str, current_user: AuthUser = Depends(get_current_
         else:
             messages.append({"role": "assistant", "content": text})
     return {"messages": messages, "deleted": deleted}
+
+
+@router.get("/{campaign_id}/choices")
+async def get_choices(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
+    """Return the current cached choices for this campaign, or null if none."""
+    _require_campaign_access(campaign_id, current_user)
+    session = _ensure_session(campaign_id)
+    if session._choice_generator is None:
+        return {"choices": None, "stale": False}
+    cached = session._choice_generator.get_current_choices()
+    if cached is None:
+        return {"choices": None, "stale": False}
+    is_stale = session._choice_generator.is_stale(cached, session._turn_count)
+    return {
+        "choices": [
+            {
+                "slot": c.slot,
+                "category_id": c.category_id,
+                "icon": c.icon,
+                "label": c.label,
+                "hint": c.hint,
+            }
+            for c in cached.choices
+        ],
+        "stale": is_stale,
+        "generated_at_turn": cached.generated_at_turn,
+        "current_turn": session._turn_count,
+    }
 
 
 @router.get("/{campaign_id}/journal")
@@ -1123,6 +1162,12 @@ async def _sync_story_cards_to_graph(campaign_id: str) -> int:
 
 @router.get("/{campaign_id}/world-graph")
 async def get_world_graph(campaign_id: str, current_user: AuthUser = Depends(get_current_user)):
+    """
+    Return the world graph — all entities extracted from narrative so far.
+
+    Neo4j is populated incrementally each turn by _extract_entities_to_graph()
+    in GameSession. The map grows as the player reads the story.
+    """
     _require_campaign_access(campaign_id, current_user)
     try:
         engine = _get_graph_engine(campaign_id)
@@ -1132,13 +1177,7 @@ async def get_world_graph(campaign_id: str, current_user: AuthUser = Depends(get
         nodes = await engine.get_all_nodes()
         rels = await engine.get_all_relationships()
 
-        # If the graph is empty, seed it from story cards so the World Map
-        # shows the entities created during scenario expansion.
-        if not nodes:
-            await _sync_story_cards_to_graph(campaign_id)
-            nodes = await engine.get_all_nodes()
-            rels = await engine.get_all_relationships()
-
+        # Load power system config for node enrichment
         ps_config = None
         try:
             ps_store = ScenarioStore(_SCENARIO_DB_PATH)
@@ -1152,6 +1191,14 @@ async def get_world_graph(campaign_id: str, current_user: AuthUser = Depends(get
 
         thought_by_npc = _collect_latest_npc_thought_payloads(campaign_id)
 
+        # ── Filter: hide RANK nodes (rank system graph) and ENTITY nodes (unknown type) ──
+        # These are seeded automatically and should not appear in the World Map
+        HIDDEN_TYPES = {"RANK", "ENTITY"}
+        visible_node_ids: set[str] = {
+            n.id for n in nodes
+            if n.node_type and n.node_type.value not in HIDDEN_TYPES
+        }
+
         return {
             "nodes": [
                 {
@@ -1162,11 +1209,12 @@ async def get_world_graph(campaign_id: str, current_user: AuthUser = Depends(get
                         _enrich_npc_node_attributes_for_world_map(
                             n.attributes, n.name, thought_by_npc, ps_config
                         )
-                        if n.node_type.value == "NPC"
+                        if n.node_type and n.node_type.value == "NPC"
                         else (n.attributes or {})
                     ),
                 }
                 for n in nodes
+                if n.node_type and n.node_type.value not in HIDDEN_TYPES
             ],
             "links": [
                 {
@@ -1176,6 +1224,7 @@ async def get_world_graph(campaign_id: str, current_user: AuthUser = Depends(get
                     "strength": r["strength"],
                 }
                 for r in rels
+                if r["source_id"] in visible_node_ids and r["target_id"] in visible_node_ids
             ],
         }
     except Exception as e:

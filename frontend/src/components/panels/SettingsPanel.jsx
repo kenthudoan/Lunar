@@ -17,7 +17,7 @@ export default function SettingsPanel({ open, onClose }) {
   const [font, setFont] = useState(readingFont || 'font-prose')
   const [size, setSize] = useState(fontSize || 16.5)
   const [delSpeedIdx, setDelSpeedIdx] = useState(() => {
-    const map = { 'instant': 0, 'fast': 1, 'normal': 2, 'slow': 3, 'typewriter': 4 }
+    const map = { 'instant': 0, 'fast': 1, 'normal': 2, 'moderate': 3, 'slow120': 4, 'slow130': 5, 'slow': 6, 'typewriter': 7 }
     return map[streamDeliverySpeed] ?? 0
   })
   const [saved, setSaved] = useState(false)
@@ -26,7 +26,7 @@ export default function SettingsPanel({ open, onClose }) {
     updateSettings({
       readingFont: font,
       fontSize: size,
-      streamDeliverySpeed: ['instant', 'fast', 'normal', 'slow', 'typewriter'][delSpeedIdx],
+      streamDeliverySpeed: ['instant', 'fast', 'normal', 'moderate', 'slow120', 'slow130', 'slow', 'typewriter'][delSpeedIdx],
     })
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -109,13 +109,13 @@ export default function SettingsPanel({ open, onClose }) {
           <div className="flex items-center justify-between mb-2">
             <label className="label mb-0">{lang === 'vi' ? 'Tốc Độ Server' : 'Stream Delivery'}</label>
             <span className="text-xs font-mono text-[var(--text-secondary)]">
-              {['0ms', '5ms', '20ms', '100ms', '65ms'][delSpeedIdx]}
+              {['0ms', '5ms', '20ms', '60ms', '120ms', '130ms', '150ms', '350ms'][delSpeedIdx]}
             </span>
           </div>
           <input
             type="range"
             min={0}
-            max={4}
+            max={7}
             step={1}
             value={delSpeedIdx}
             onChange={(e) => setDelSpeedIdx(parseInt(e.target.value))}
@@ -123,7 +123,7 @@ export default function SettingsPanel({ open, onClose }) {
           />
           <div className="flex justify-between text-[9px] text-[var(--text-disabled)] mt-1">
             <span>{lang === 'vi' ? 'Tức thì' : 'Instant'}</span>
-            <span>{lang === 'vi' ? 'Bình thường' : 'Normal'}</span>
+            <span>{lang === 'vi' ? 'Chậm' : 'Slow'}</span>
             <span>{lang === 'vi' ? 'Chậm nhất' : 'Slowest'}</span>
           </div>
         </div>

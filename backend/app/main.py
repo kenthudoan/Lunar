@@ -6,6 +6,10 @@ from pydantic import BaseModel
 
 from app.config import settings
 
+# Suppress LiteLLM verbose INFO logs (keep warnings/errors)
+logging.getLogger("litellm").setLevel(logging.WARNING)
+logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+
 if settings.debug:
     logging.basicConfig(level=logging.DEBUG)
 else:

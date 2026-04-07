@@ -9,6 +9,7 @@ from app.db.user_store import UserStore
 from app.db.scenario_store import ScenarioStore
 from app.db.event_store import EventStore
 from app.middleware.auth import AuthUser, get_current_user, require_admin
+from app.config import settings
 
 
 router = APIRouter()
@@ -32,6 +33,16 @@ def _get_scenario_store() -> ScenarioStore:
 def _get_event_store() -> EventStore:
     db_path = os.environ.get("EVENT_DB_PATH", f"{_BACKEND_DIR}/events.db")
     return EventStore(db_path)
+
+
+def _get_graph_engine(campaign_id: str):
+    """Get a GraphEngine to clear Neo4j data for a campaign."""
+    try:
+        from app.engines.graph_engine import GraphEngine
+        engine = GraphEngine(settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password, campaign_id)
+        return engine
+    except Exception:
+        return None
 
 
 # ---- Response models ----
@@ -241,12 +252,28 @@ def list_all_scenarios(_: AuthUser = Depends(require_admin)):
 @router.delete("/scenarios/{scenario_id}", response_model=MessageResponse)
 def delete_scenario(scenario_id: str, _: AuthUser = Depends(require_admin)):
     store = _get_scenario_store()
+    event_store = _get_event_store()
     try:
+        campaigns = store.get_campaigns(scenario_id)
         deleted = store.delete_scenario(scenario_id)
     finally:
         store.close()
     if not deleted:
         raise HTTPException(status_code=404, detail="Scenario not found")
+    try:
+        for c in campaigns:
+            event_store.delete_by_campaign(c.id)
+    finally:
+        event_store.close()
+    # Clear Neo4j world graph for all campaigns of this scenario
+    for c in campaigns:
+        graph = _get_graph_engine(c.id)
+        if graph:
+            try:
+                import asyncio
+                asyncio.get_event_loop().run_until_complete(graph.clear_campaign(c.id))
+            except Exception:
+                pass
     return MessageResponse(message="Scenario deleted successfully")
 
 
@@ -256,10 +283,23 @@ def delete_scenario(scenario_id: str, _: AuthUser = Depends(require_admin)):
 @router.delete("/campaigns/{campaign_id}", response_model=MessageResponse)
 def delete_campaign(campaign_id: str, _: AuthUser = Depends(require_admin)):
     store = _get_scenario_store()
+    event_store = _get_event_store()
     try:
         deleted = store.delete_campaign(campaign_id)
     finally:
         store.close()
     if not deleted:
         raise HTTPException(status_code=404, detail="Campaign not found")
+    try:
+        event_store.delete_by_campaign(campaign_id)
+    finally:
+        event_store.close()
+    # Clear Neo4j world graph for this campaign
+    graph = _get_graph_engine(campaign_id)
+    if graph:
+        try:
+            import asyncio
+            asyncio.get_event_loop().run_until_complete(graph.clear_campaign(campaign_id))
+        except Exception:
+            pass
     return MessageResponse(message="Campaign deleted successfully")

@@ -78,7 +78,7 @@ function SubPill({ sub, onRename, readOnly }) {
   return (
     <span
       onClick={() => !readOnly && !editing && setEditing(true)}
-      className={`inline-flex items-center px-1.5 py-0.5 rounded bg-[var(--warning-muted)] border border-[var(--border-default)] text-[var(--warning)] text-[10px] font-medium transition-colors ${readOnly ? '' : 'hover:border-[var(--warning)] cursor-pointer'}`}
+      className={`inline-flex items-center px-1.5 py-0.5 rounded bg-[var(--warning-muted)] border border-[var(--border-default)] text-[var(--warning)] text-[10px] sm:text-xs font-medium transition-colors ${readOnly ? '' : 'hover:border-[var(--warning)] cursor-pointer'}`}
     >
       {editing ? (
         <input
@@ -87,7 +87,7 @@ function SubPill({ sub, onRename, readOnly }) {
           onChange={e => setVal(e.target.value)}
           onBlur={() => { setEditing(false); onRename(val) }}
           onKeyDown={e => { if (e.key === 'Enter') { setEditing(false); onRename(val) } }}
-          className="w-16 text-[9px] px-1 py-0 bg-[var(--bg-overlay)] border border-[var(--warning)] rounded"
+          className="min-w-[4.5rem] text-[10px] px-1.5 py-0.5 bg-[var(--bg-overlay)] border border-[var(--warning)] rounded"
           onClick={e => e.stopPropagation()}
         />
       ) : (
@@ -129,14 +129,14 @@ function StageRow({ stage, index, onChange, onRemove, lang, editable }) {
               onChange={e => onChange({ ...stage, name: e.target.value })}
               onBlur={() => setEditing(false)}
               onKeyDown={e => { if (e.key === 'Enter') setEditing(false) }}
-              className="flex-1 min-w-[120px] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-1 text-xs font-semibold text-[var(--text-primary)] focus:border-[var(--border-focus)] focus:outline-none"
+              className="flex-1 min-w-[120px] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-1 text-[11px] font-semibold text-[var(--text-primary)] focus:border-[var(--border-focus)] focus:outline-none"
               placeholder={t('stageNamePlaceholder', lang)}
               onClick={e => e.stopPropagation()}
             />
           ) : (
             <span
               onClick={() => !ro && setEditing(true)}
-              className={`text-xs font-semibold text-[var(--text-primary)] flex-1 min-w-0 truncate ${ro ? '' : 'cursor-pointer hover:text-[var(--accent)]'}`}
+              className={`text-[13px] font-semibold text-[var(--text-primary)] flex-1 min-w-0 truncate ${ro ? '' : 'cursor-pointer hover:text-[var(--accent)]'}`}
             >
               {displayName}
             </span>
@@ -146,7 +146,7 @@ function StageRow({ stage, index, onChange, onRemove, lang, editable }) {
             value={stageStyle}
             onChange={e => handleStyleChange(e.target.value)}
             disabled={ro}
-            className="text-[9px] py-1 px-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--text-secondary)] cursor-pointer max-w-[140px] disabled:opacity-60"
+            className="w-auto max-w-[11rem] text-[10px] py-1.5 px-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--text-primary)] cursor-pointer disabled:opacity-60"
             title={t('subStyle', lang)}
             onClick={e => e.stopPropagation()}
           >
@@ -159,10 +159,10 @@ function StageRow({ stage, index, onChange, onRemove, lang, editable }) {
             <button
               type="button"
               onClick={onRemove}
-              className="p-1 rounded text-[var(--text-disabled)] hover:text-[var(--error)] hover:bg-[var(--error-muted)] transition-all opacity-0 group-hover/row:opacity-100"
+              className="p-1.5 rounded-lg text-[var(--text-disabled)] hover:text-[var(--error)] hover:bg-[var(--error-muted)] transition-all"
               title={t('removeStage', lang)}
             >
-              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
               </svg>
             </button>
@@ -241,11 +241,11 @@ function AxisCard({ axis, index, onChange, onRemove, onAddStage, lang, editable 
               <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
             </span>
           )}
-          <span className="font-semibold text-xs text-[var(--text-primary)] truncate">{title}</span>
-          <span className="flex-shrink-0 text-[9px] px-1.5 py-0.5 rounded-md bg-[var(--bg-surface)] text-[var(--text-secondary)] border border-[var(--border-subtle)]">
+          <span className="font-semibold text-[11px] text-[var(--text-primary)] truncate">{title}</span>
+          <span className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded-md bg-[var(--bg-surface)] text-[var(--text-secondary)] border border-[var(--border-subtle)]">
             {sorted.length} {t('stagesShort', lang)}
           </span>
-          <span className={`hidden sm:inline text-[9px] text-[var(--text-disabled)] truncate min-w-0 ${expanded ? 'opacity-40' : ''}`}>
+          <span className={`hidden sm:inline text-[10px] text-[var(--text-disabled)] truncate min-w-0 ${expanded ? 'opacity-40' : ''}`}>
             {preview}
           </span>
           <svg
@@ -269,7 +269,7 @@ function AxisCard({ axis, index, onChange, onRemove, onAddStage, lang, editable 
             <button
               type="button"
               onClick={() => onChange({ ...axis, is_primary: !axis.is_primary })}
-              className={`p-1.5 rounded-lg border text-[9px] font-semibold transition-all ${
+              className={`p-1.5 rounded-lg border text-[10px] font-semibold transition-all ${
                 axis.is_primary
                   ? 'border-[var(--warning)] text-[var(--warning)] bg-[var(--warning-muted)]'
                   : 'border-[var(--border-subtle)] text-[var(--text-disabled)] hover:border-[var(--warning)]'
@@ -300,7 +300,7 @@ function AxisCard({ axis, index, onChange, onRemove, onAddStage, lang, editable 
             <button
               type="button"
               onClick={onRemove}
-              className="p-1.5 rounded-lg text-[var(--text-disabled)] hover:text-[var(--error)] hover:bg-[var(--error-muted)] transition-all"
+              className="p-1.5 border rounded-lg text-[var(--text-disabled)] hover:text-[var(--error)] hover:bg-[var(--error-muted)] transition-all"
               title={t('removeAxis', lang)}
             >
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -314,41 +314,45 @@ function AxisCard({ axis, index, onChange, onRemove, onAddStage, lang, editable 
       {expanded && (
         <div className="border-t border-[var(--border-subtle)] px-3 pb-3 pt-2 space-y-2">
           <div>
-            <label className="text-[9px] text-[var(--text-disabled)] mb-0.5 block">{t('axisName', lang)}</label>
+            <label className="text-[10px] text-[var(--text-secondary)] mb-0.5 block font-medium">{t('axisName', lang)}</label>
             <input
               value={axis.axis_name || ''}
               onChange={e => onChange({ ...axis, axis_name: e.target.value })}
               readOnly={ro}
-              className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2.5 py-2 text-xs font-semibold text-[var(--text-primary)] placeholder:text-[var(--text-disabled)] focus:border-[var(--border-focus)] focus:outline-none read-only:opacity-80"
+              className="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2.5 py-2 text-[11px] font-semibold text-[var(--text-primary)] placeholder:text-[var(--text-disabled)] focus:border-[var(--border-focus)] focus:outline-none read-only:opacity-80"
               placeholder={t('axisNamePlaceholder', lang)}
             />
           </div>
           <div>
-            <label className="text-[9px] text-[var(--text-disabled)] mb-0.5 block">{t('desc', lang)}</label>
+            <label className="text-[10px] text-[var(--text-secondary)] mb-0.5 block font-medium">{t('desc', lang)}</label>
             <textarea
               value={axis.description || ''}
               onChange={e => onChange({ ...axis, description: e.target.value })}
               readOnly={ro}
               rows={3}
-              className="w-full resize-y min-h-[72px] rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2.5 py-2 text-[10px] leading-relaxed text-[var(--text-secondary)] placeholder:text-[var(--text-disabled)] focus:border-[var(--border-focus)] focus:outline-none read-only:opacity-80"
+              className="w-full resize-y min-h-[72px] rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2.5 py-2 text-[11px] leading-relaxed text-[var(--text-secondary)] placeholder:text-[var(--text-disabled)] focus:border-[var(--border-focus)] focus:outline-none read-only:opacity-80"
               placeholder={t('descPlaceholder', lang)}
             />
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[9px] text-[var(--text-disabled)] shrink-0">{t('weight', lang)}</span>
-            <input
-              type="range"
-              min="0.1"
-              max="2"
-              step="0.1"
-              disabled={ro}
-              value={axis.weight || 1.0}
-              onChange={e => onChange({ ...axis, weight: parseFloat(e.target.value) })}
-              className="flex-1 accent-[var(--accent)] disabled:opacity-50"
-            />
-            <span className="text-[9px] font-mono text-[var(--text-secondary)] w-7 text-right shrink-0">
-              {(axis.weight || 1.0).toFixed(1)}
-            </span>
+          <div>
+            <label className="text-[10px] text-[var(--text-secondary)] mb-0.5 block font-medium">
+              {t('weight', lang)}
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="range"
+                min="0.1"
+                max="2"
+                step="0.1"
+                disabled={ro}
+                value={axis.weight || 1.0}
+                onChange={e => onChange({ ...axis, weight: parseFloat(e.target.value) })}
+                className="flex-1 accent-[var(--accent)] disabled:opacity-50"
+              />
+              <span className="text-[10px] font-mono text-[var(--text-secondary)] w-7 text-right shrink-0">
+                {(axis.weight || 1.0).toFixed(1)}
+              </span>
+            </div>
           </div>
 
           {sorted.length > 0 ? (
@@ -375,7 +379,7 @@ function AxisCard({ axis, index, onChange, onRemove, onAddStage, lang, editable 
             <button
               type="button"
               onClick={onAddStage}
-              className="flex items-center gap-1.5 text-[10px] text-[var(--accent)] hover:underline"
+              className="flex items-center gap-1.5 text-[11px] text-[var(--accent)] hover:underline"
             >
               <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
@@ -469,7 +473,7 @@ export default function RankListView({
           <span className="text-[11px] font-semibold text-[var(--text-secondary)] truncate">
             {powerSystem?.power_system_name || t('powerSystem', lang)}
           </span>
-          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--warning-muted)] text-[var(--warning)] font-bold flex-shrink-0">
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--warning-muted)] text-[var(--warning)] font-bold flex-shrink-0">
             {axes.length}
           </span>
           <span className="text-[10px] text-[var(--text-disabled)] flex-shrink-0">{t('systems', lang)}</span>
@@ -478,7 +482,7 @@ export default function RankListView({
           <button
             type="button"
             onClick={addAxis}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-dashed border-[var(--border-strong)] text-[10px] font-medium text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)] transition-all flex-shrink-0"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-dashed border-[var(--border-strong)] text-[11px] font-medium text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)] transition-all flex-shrink-0"
           >
             <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>

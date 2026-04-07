@@ -285,6 +285,13 @@ const translations = {
     'action.placeholder.awaitNarrator': 'Đang chờ người kể tường thuật xong…',
     'action.placeholder.recoveryFirst': 'Nhấn «Tiếp tục» trên banner vàng để hoàn tất lượt đang dở.',
     'action.placeholder.continue': 'Nhấn Enter để tiếp tục câu chuyện...',
+    'action.placeholder.freeText': 'Nhập hành động của bạn...',
+    'choices.continueBtn': 'Tiếp tục',
+    'choices.preGameHint': 'Mở đầu đã hoàn tất — bắt đầu cuộc phiêu lưu của bạn.',
+    'choices.hide': 'Ẩn',
+    'choices.title': 'Gợi ý hành động',
+    'choices.show': 'Hiện {count} hành động',
+    'status.waitingChoices': 'Đang chuẩn bị gợi ý hành động…',
     'action.send': 'Gửi',
     'action.continueKey': 'Ctrl + Enter để tiếp tục',
 
@@ -399,7 +406,7 @@ const translations = {
     // World Map
     'map.title': 'Bản Đồ Thế Giới',
     'map.nodes': 'nút · {links} liên kết',
-    'map.empty': 'Chưa có dữ liệu thế giới. Chơi để tạo bản đồ.',
+    'map.empty': 'Đọc truyện để khám phá thế giới — bản đồ sẽ hiện dần khi bạn gặp nhân vật, địa điểm, vật phẩm mới.',
     'map.loading': 'Đang lập bản đồ...',
     'map.search': 'Tìm kiếm thế giới...',
     'map.searchClear': 'Xóa kết quả',
@@ -443,9 +450,12 @@ const translations = {
     'play.opening.badge': 'Mở Đầu · {title}',
     'play.campaignMissing': 'Không tìm thấy chiến dịch',
     'play.campaignMissingHint': 'URL không chứa ID chiến dịch hợp lệ.',
+    'play.campaignDeleted': 'Chiến dịch đã bị xóa',
+    'play.campaignDeletedHint': 'Chiến dịch này đã bị xóa khỏi máy chủ. Quay về trang chủ.',
     'play.campaignFetchFailed': 'Không thể kết nối với máy chủ. Vui lòng thử lại.',
     'generic.backHome': 'Quay về trang chủ',
     'generic.or': 'hoặc',
+    'generic.send': 'Gửi',
 
     // Login
     'login.title': 'Chào trở lại',
@@ -582,6 +592,12 @@ const translations = {
     'timeskip.1week': '1 Tuần',
     'timeskip.1month': '1 Tháng',
 
+    // Choices
+    'choices.title': 'Gợi ý hành động',
+    'choices.hide': 'Ẩn',
+    'choices.show': 'Hiện {count} hành động',
+    'status.waitingChoices': 'Đang chuẩn bị gợi ý hành động…',
+
     // Misc
     'home.badge': 'AI Narrative Engine · Neo4j Knowledge Graph',
     'combat.active': 'Combat Active',
@@ -695,6 +711,13 @@ const translations = {
     'action.placeholder.awaitNarrator': 'Waiting for the narrator to finish this turn…',
     'action.placeholder.recoveryFirst': 'Tap Continue on the yellow banner to finish the interrupted turn.',
     'action.placeholder.continue': 'Press Enter to continue the story...',
+    'action.placeholder.freeText': 'Enter your action...',
+    'choices.continueBtn': 'Continue',
+    'choices.preGameHint': 'Opening complete — begin your journey.',
+    'choices.hide': 'Hide',
+    'choices.title': 'Action Suggestions',
+    'choices.show': 'Show {count} actions',
+    'status.waitingChoices': 'Preparing action suggestions…',
     'action.send': 'Send',
     'action.continueKey': 'Ctrl + Enter to continue',
 
@@ -809,7 +832,7 @@ const translations = {
     // World Map
     'map.title': 'World Map',
     'map.nodes': 'nodes · {links} links',
-    'map.empty': 'No world data yet. Play to populate the graph.',
+    'map.empty': 'Read the story to discover the world — the map reveals entities as you encounter them.',
     'map.loading': 'Mapping world topology...',
     'map.search': 'Search world facts...',
     'map.searchClear': 'Clear results',
@@ -853,9 +876,12 @@ const translations = {
     'play.opening.badge': 'Opening · {title}',
     'play.campaignMissing': 'Campaign not found',
     'play.campaignMissingHint': 'URL does not contain a valid campaign ID.',
+    'play.campaignDeleted': 'Campaign has been deleted',
+    'play.campaignDeletedHint': 'This campaign was deleted from the server. Go back to home.',
     'play.campaignFetchFailed': 'Unable to connect to the server. Please try again.',
     'generic.backHome': 'Back to home',
     'generic.or': 'or',
+    'generic.send': 'Send',
 
     // Login
     'login.title': 'Welcome back',
@@ -991,6 +1017,14 @@ const translations = {
     'timeskip.3days': '3 Days',
     'timeskip.1week': '1 Week',
     'timeskip.1month': '1 Month',
+
+    // Choices
+    'choices.continueBtn': 'Continue',
+    'choices.preGameHint': 'Opening complete — begin your journey.',
+    'choices.hide': 'Hide',
+    'choices.title': 'Action Suggestions',
+    'choices.show': 'Show {count} actions',
+    'status.waitingChoices': 'Preparing action suggestions…',
 
     // Misc
     'home.badge': 'AI Narrative Engine · Neo4j Knowledge Graph',

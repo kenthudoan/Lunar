@@ -3,13 +3,25 @@ import { createPortal } from 'react-dom'
 import { flushSync } from 'react-dom'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useGameStore } from '../store'
-import { streamAction, fetchJournal, fetchHistory, fetchCampaignScenario, fetchInventory as fetchInventoryApi, rewindLastAction, getPendingAction } from '../api'
+import { streamAction, fetchJournal, fetchHistory, fetchCampaignScenario, fetchInventory as fetchInventoryApi, rewindLastAction, getPendingAction, fetchChoices } from '../api'
 import { mergeCampaignPatch } from '../utils/campaignStorage'
 import { useI18n } from '../i18n'
 
 import NarrativeBlock from '../components/canvas/NarrativeBlock'
 import { buildChaptersFromMessages, sliceMessagesForChapter } from '../utils/chapters'
 import { MENTION_SPLIT_REGEX } from '../utils/mentionRegex'
+
+/** Rows for UI: legacy state may be a bare array or `{ choices: [...] }`. */
+function getChoiceRows(stored) {
+  if (stored == null) return null
+  if (Array.isArray(stored)) return stored
+  return stored.choices ?? null
+}
+
+function choiceListLength(stored) {
+  const rows = getChoiceRows(stored)
+  return rows?.length ?? 0
+}
 
 // ---- User action bubble ----
 function ActionBubble({ content, onClick }) {
@@ -36,7 +48,6 @@ function ActionBubble({ content, onClick }) {
           text-sm leading-relaxed font-light
           text-[var(--text-primary)]
           hover:opacity-80 transition-opacity
-          cursor-pointer
           ${actionType === 'META' ? 'font-mono' : ''}
         `}
       >
@@ -196,16 +207,6 @@ function ChapterBar({ chapters, activeChapterId, viewingChapterId, selectedChapt
   )
 }
 
-// ---- Helper: read campaign state directly from localStorage (synchronous) ----
-function readCampaignFromStorage(campaignId) {
-  try {
-    const raw = localStorage.getItem('lunar_campaigns')
-    if (!raw) return {}
-    const all = JSON.parse(raw)
-    return all[campaignId] || {}
-  } catch { return {} }
-}
-
 // ---- Main Play Page ----
 export default function Play() {
   const { campaignId } = useParams()
@@ -224,33 +225,35 @@ export default function Play() {
     setChapters: setChaptersInStore,
   } = useGameStore()
 
-  // Read persisted state synchronously ONCE at mount (function initializer).
-  // This avoids calling setState during render.
-  const initialState = useMemo(() => readCampaignFromStorage(campaignId), [campaignId])
-
-  // Compute the "last chapter id" from initialState so the FIRST render already shows
-  // the correct chapter — not blank "ch-opening".  This avoids the flash where
-  // activeChapterId is null before the useEffect runs.
-  const initialChapterId = useMemo(() => {
-    if (initialState.chapters?.length) {
-      return initialState.chapters[initialState.chapters.length - 1].id
-    }
-    if (initialState.messages?.length) {
-      return buildChaptersFromMessages(initialState.messages)[
-        buildChaptersFromMessages(initialState.messages).length - 1
-      ]?.id ?? null
-    }
-    return null
-  }, []) // intentionally empty deps — compute once from initialState
-
-  const [messages, setMessages] = useState(initialState.messages || [])
-  const [chapters, setChapters] = useState(initialState.chapters || [])
-  const [journal, setJournalState] = useState(initialState.journal || [])
-  const [inventory, setInventoryState] = useState(initialState.inventory || [])
-  const [activeScenario, setActiveScenario] = useState(initialState.scenario || null)
-  const [activeChapterId, setActiveChapterId] = useState(initialChapterId)
+  // Initial state is EMPTY — we ALWAYS load from the server on mount.
+  // localStorage is a fallback only if the server call fails.
+  // This prevents stale localStorage data from showing deleted campaigns.
+  const [messages, setMessages] = useState([])
+  const [chapters, setChapters] = useState([])
+  const [journal, setJournalState] = useState([])
+  const [inventory, setInventoryState] = useState([])
+  const [activeScenario, setActiveScenario] = useState(null)
+  const [activeChapterId, setActiveChapterId] = useState(null)
   const [viewingChapterId, setViewingChapterId] = useState(null) // null = viewing active / live
   const [loadingError, setLoadingError] = useState(null)
+
+  // Restore choices from localStorage on mount so the poll doesn't spin up unnecessarily.
+  // Safe: if localStorage is empty/null, choices stays null and poll fires normally.
+  const _initialChoices = (() => {
+    try {
+      const all = JSON.parse(localStorage.getItem('lunar_campaigns') || '{}')
+      return (all[campaignId || ''] || {}).choices ?? null
+    } catch { return null }
+  })()
+  const [choices, setChoices] = useState(_initialChoices)
+  const [choicesVisible, setChoicesVisible] = useState(true)
+  /** True after narrator stream finishes but choices have not yet arrived from backend. */
+  const [narratorDoneWaitingChoices, setNarratorDoneWaitingChoices] = useState(false)
+  /** True after SSE sends [CHOICES_PENDING] until choices payload or poll fills cards. */
+  const [choicesGenerating, setChoicesGenerating] = useState(false)
+
+  const choicesForDoneRef = useRef(choices)
+  useEffect(() => { choicesForDoneRef.current = choices }, [choices])
   const hydratedRef = useRef(false)
   const persistRef = useRef(null)
 
@@ -265,6 +268,63 @@ export default function Play() {
   useEffect(() => { _scenarioForPersist.current = activeScenario }, [activeScenario])
   useEffect(() => { _journalForPersist.current = journal }, [journal])
   useEffect(() => { _inventoryForPersist.current = inventory }, [inventory])
+
+  // Poll for choices after narrator finishes streaming
+  const _pollTimerRef = useRef(null)
+  const _pollCountRef = useRef(0)
+  useEffect(() => {
+    if (!narratorDoneWaitingChoices) return
+    // Already have choices from localStorage (restored on mount) — skip poll entirely.
+    if (choiceListLength(choices) > 0) return
+    _pollCountRef.current = 0
+    _pollTimerRef.current = setInterval(async () => {
+      // Stop after 30 seconds (~60 polls × 500ms) to avoid infinite polling.
+      _pollCountRef.current++
+      if (_pollCountRef.current > 60) {
+        clearInterval(_pollTimerRef.current)
+        _pollTimerRef.current = null
+        return
+      }
+      const data = await fetchChoices(campaignId)
+      if (data?.choices?.length) {
+        setNarratorDoneWaitingChoices(false)
+        setChoicesGenerating(false)
+        setChoices({
+          choices: data.choices,
+          stale: data.stale,
+          generated_at_turn: data.generated_at_turn,
+          current_turn: data.current_turn,
+        })
+        clearInterval(_pollTimerRef.current)
+        _pollTimerRef.current = null
+      }
+    }, 500)
+    return () => { if (_pollTimerRef.current) { clearInterval(_pollTimerRef.current); _pollTimerRef.current = null } }
+  }, [narratorDoneWaitingChoices, campaignId])
+
+  // Never show "waiting" if we already have cards (handles CHOICES before [DONE] + late onDone).
+  useEffect(() => {
+    if (choiceListLength(choices) > 0) {
+      setNarratorDoneWaitingChoices(false)
+      setChoicesGenerating(false)
+    }
+  }, [choices])
+
+  // Persist choices to localStorage independently — gated by persistedRef.
+  // Choices are always loaded from the server (via SSE or fetchChoices poll), not from localStorage on mount.
+  // This keeps choices fresh even if the campaign was deleted and recreated.
+  const _prevChoicesForPersist = useRef(null)
+  useEffect(() => {
+    if (choices === null) return
+    if (choices === _prevChoicesForPersist.current) return
+    _prevChoicesForPersist.current = choices
+    try {
+      const all = JSON.parse(localStorage.getItem('lunar_campaigns') || '{}')
+      const prev = all[campaignId] || {}
+      all[campaignId] = { ...prev, choices }
+      localStorage.setItem('lunar_campaigns', JSON.stringify(all))
+    } catch {}
+  }, [choices, campaignId])
 
   // Guard: only persist to localStorage AFTER fetchHistory has run.
   // persistRef is initialized as null, and this ref tracks whether it's safe to persist.
@@ -284,6 +344,7 @@ export default function Play() {
       const scn = _scenarioForPersist.current
       const jrn = _journalForPersist.current
       const inv = _inventoryForPersist.current
+      const chc = _prevChoicesForPersist.current
       const all = JSON.parse(localStorage.getItem('lunar_campaigns') || '{}')
       const prev = all[campaignId] || {}
       all[campaignId] = {
@@ -293,6 +354,7 @@ export default function Play() {
         chapters: buildChaptersFromMessages(msgs),
         journal: jrn,
         inventory: inv,
+        choices: chc ?? prev.choices ?? null,
       }
       localStorage.setItem('lunar_campaigns', JSON.stringify(all))
     } catch {}
@@ -348,6 +410,13 @@ export default function Play() {
   )
 
   const isViewingOldChapter = viewingChapterId !== null && viewingChapterId !== activeChapterId
+
+  /** Sticky banner in scroll area: visible while choices are being prepared (not only under input). */
+  const showChoicePrepareBanner = useMemo(() => {
+    if (isViewingOldChapter) return false
+    if (!messages.some((m) => m.role === 'user')) return false
+    return (choicesGenerating || narratorDoneWaitingChoices) && choiceListLength(choices) === 0
+  }, [isViewingOldChapter, messages, choicesGenerating, narratorDoneWaitingChoices, choices])
 
   // ---- Panel state ----
   const [panelState, setPanelState] = useState({
@@ -413,7 +482,6 @@ export default function Play() {
   // ---- Refs ----
   const scrollRef = useRef(null)
   const bottomRef = useRef(null)
-  const userScrolledUp = useRef(false)
   const scrollRafRef = useRef(null)
 
   // ---- Streaming handler ----
@@ -541,6 +609,9 @@ export default function Play() {
         )
         if (pending && action && !hasCompleteResponse) {
           setViewingChapterId(null)
+          setChoices(null)  // Clear stale choices — they're for the previous turn, not the pending one
+          setNarratorDoneWaitingChoices(false)
+          setChoicesGenerating(false)
           setResumingPending({ action, actionId: action_id, createdAt: created_at })
           // Pin "live" chapter to the server's pending turn (avoids phantom ch-2 when
           // history ordering or duplicate rows would misalign with completeChapterId).
@@ -550,10 +621,24 @@ export default function Play() {
         } else {
           setResumingPending(null)
           mergeCampaignPatch(campaignId, { pendingActionId: null })
+          // Last message is an assistant response (complete turn) — narrator is done,
+          // choices should already be generated server-side. Start the poll immediately.
+          if (history && history.length > 0 && history[history.length - 1].role === 'assistant') {
+            setNarratorDoneWaitingChoices(true)
+          }
         }
       })
-      .catch(() => {
-        // Only set error if history was never loaded successfully
+      .catch((err) => {
+        // 404 = campaign deleted (or no access) — always show deleted, even if history
+        // returned empty first in an older backend build.
+        const isNotFound =
+          err?.message?.includes('404') ||
+          err?.message?.includes('Not Found') ||
+          err?.message?.includes('not found')
+        if (isNotFound) {
+          setLoadingError('deleted')
+          return
+        }
         if (!hydratedRef.current) {
           setLoadingError('fetch_failed')
         }
@@ -580,22 +665,31 @@ export default function Play() {
   }, [campaignId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Scroll tracking ----
+  const [userScrolledUp, setUserScrolledUp] = useState(false)
   useEffect(() => {
     const container = scrollRef.current
     if (!container) return
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = container
-      userScrolledUp.current = scrollHeight - scrollTop - clientHeight > 120
+      const isUp = scrollHeight - scrollTop - clientHeight > 120
+      setUserScrolledUp(isUp)
     }
     container.addEventListener('scroll', handleScroll)
     return () => container.removeEventListener('scroll', handleScroll)
   }, [])
 
+  // Auto-hide choices when user scrolled up to read; show again when back at bottom
+  useEffect(() => {
+    if (userScrolledUp && choicesVisible) {
+      setChoicesVisible(false)
+    }
+  }, [userScrolledUp])
+
   // ---- Auto-scroll ----
   useEffect(() => {
     if (!scrollRef.current || !bottomRef.current) return
     // Skip if user explicitly scrolled up (they want to read old content)
-    if (userScrolledUp.current) return
+    if (userScrolledUp) return
     // Cancel any pending smooth animation from a previous tick
     if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current)
     scrollRafRef.current = requestAnimationFrame(() => {
@@ -666,7 +760,7 @@ export default function Play() {
       setChapters(built)
       setActiveChapterId(built[built.length - 1]?.id ?? 'ch-opening')
       setViewingChapterId(null)
-      userScrolledUp.current = false
+      setUserScrolledUp(false)
     } else {
       // fetchHistory loaded the complete messages + set activeChapterId.
       // RecoveringChapterIdRef records which chapter needs completion — used
@@ -674,7 +768,7 @@ export default function Play() {
       recoveringChapterIdRef.current = activeChapterIdRef.current
       // The SSE onChunk will finish the pending response.
       setViewingChapterId(null)
-      userScrolledUp.current = false
+      setUserScrolledUp(false)
       // When replaying: only append if the action is NOT already the last user message.
       // If it IS the last user message (user action already saved to localStorage before
       // the previous stream crashed), skip appending — the existing stream will complete
@@ -698,6 +792,10 @@ export default function Play() {
       // Applies to BOTH isReplay (recovery replay) and normal sends.
       if (_sentActions.current.has(action)) return
       _sentActions.current.add(action)
+      // Clear choices — they'll be replaced after this turn's narrator finishes
+      setNarratorDoneWaitingChoices(false)
+      setChoicesGenerating(false)
+      setChoices(null)
       setStreaming(true)
 
       // Persist after adding new chapter
@@ -735,6 +833,12 @@ export default function Play() {
           else if (item.action === 'use') updateInventoryItemLocal(item.name, 'used')
           else if (item.action === 'lose') updateInventoryItemLocal(item.name, 'lost')
         },
+        onEntityRevealed: (data) => {
+          // Trigger WorldMap reload if the panel is open.
+          // The WorldMapModal reads from its own state — fire a custom event
+          // that WorldMapModal listens to.
+          window.dispatchEvent(new CustomEvent('worldmap:refresh', { detail: data }))
+        },
         onPlotAuto: (plot) => {
           const formatted = formatAutoPlotMessage(plot)
           flushSync(() => setMessages((prev) => [...prev, { role: 'assistant', content: formatted }]))
@@ -743,6 +847,14 @@ export default function Play() {
         onRankAdvance: (result) => {
           setRankAdvanceNotif(result)
           setTimeout(() => setRankAdvanceNotif(null), 8000)
+        },
+        onChoicesPending: () => {
+          setChoicesGenerating(true)
+        },
+        onChoices: (data) => {
+          setNarratorDoneWaitingChoices(false)
+          setChoicesGenerating(false)
+          setChoices(data)
         },
         onTruncateClean: (cleanText) => {
           flushSync(() => {
@@ -760,6 +872,12 @@ export default function Play() {
         },
         onDone: () => {
           setStreaming(false)
+          // After [DONE], CHOICES may already have been applied in the same tick — check after microtask.
+          queueMicrotask(() => {
+            if (choiceListLength(choicesForDoneRef.current) === 0) {
+              setNarratorDoneWaitingChoices(true)
+            }
+          })
           setTimeout(() => { if (persistRef.current) persistRef.current() }, 0)
           setTimeout(() => setCombatMode(false), 3000)
           mergeCampaignPatch(campaignId, { pendingActionId: null })
@@ -774,6 +892,8 @@ export default function Play() {
         },
         onError: () => {
           setStreaming(false)
+          setNarratorDoneWaitingChoices(false)
+          setChoicesGenerating(false)
           mergeCampaignPatch(campaignId, { pendingActionId: null })
           useGameStore.getState().clearPendingActionId()
           setRecoveryMode(false)
@@ -879,11 +999,15 @@ export default function Play() {
         </div>
         <div>
           <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-2">
-            {loadingError === 'missing' ? t('play.campaignMissing') : t('error.backendOffline')}
+            {loadingError === 'missing' ? t('play.campaignMissing') :
+             loadingError === 'deleted' ? t('play.campaignDeleted') :
+             t('error.backendOffline')}
           </h2>
           <p className="text-sm text-[var(--text-secondary)] max-w-sm">
             {loadingError === 'missing'
               ? t('play.campaignMissingHint')
+              : loadingError === 'deleted'
+              ? t('play.campaignDeletedHint')
               : t('play.campaignFetchFailed')}
           </p>
         </div>
@@ -1207,6 +1331,19 @@ export default function Play() {
               <NarratorSkeleton />
             )}
 
+            {showChoicePrepareBanner && (
+              <div
+                className="sticky bottom-4 z-[5] mx-auto flex max-w-[min(640px,100%)] items-center gap-3 rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--bg-surface)]/95 px-4 py-3 shadow-[var(--shadow-md)] backdrop-blur-sm"
+                role="status"
+                aria-live="polite"
+              >
+                <span className="flex h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--warning)]" />
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
+                  <p className="text-sm text-[var(--text-secondary)]">{t('status.waitingChoices')}</p>
+                </div>
+              </div>
+            )}
+
             <div ref={bottomRef} className="h-4" />
           </div>
         </div>
@@ -1216,13 +1353,19 @@ export default function Play() {
 
       {/* ===== INPUT AREA ===== */}
       {!isViewingOldChapter && (
-        <div className="flex-none border-t border-[var(--border-subtle)] bg-[var(--bg-surface)]/95 backdrop-blur-xl z-10">
+        <div className={`flex-none border-t bg-[var(--bg-surface)]/95 backdrop-blur-xl z-10 ${isStreaming || resumingPending ? 'border-transparent' : 'border-[var(--border-subtle)]'}`}>
           <div className="max-w-[var(--content-max-width)] mx-auto px-5 sm:px-6 md:px-8">
             <ActionInputRedesigned
               onSubmit={handleAction}
               disabled={isStreaming}
               awaitingNarrator={awaitingNarrator}
               recoveryBlocking={!!resumingPending?.action}
+              waitingForChoiceSuggestions={choicesGenerating || narratorDoneWaitingChoices}
+              choices={getChoiceRows(choices)}
+              choicesVisible={choicesVisible}
+              onToggleChoicesVisible={() => setChoicesVisible((v) => !v)}
+              hasPlayerTurn={messages.some((m) => m.role === 'user')}
+              suppressInlineChoicesWait={showChoicePrepareBanner}
             />
           </div>
         </div>
@@ -1304,48 +1447,41 @@ export default function Play() {
 }
 
 // ---- Redesigned Action Input ----
-function ActionInputRedesigned({ onSubmit, disabled, awaitingNarrator = false, recoveryBlocking = false }) {
+// Layout: tabs + cards ALWAYS above input. No expand/collapse toggle.
+function ActionInputRedesigned({
+  onSubmit, disabled, awaitingNarrator = false, recoveryBlocking = false,
+  waitingForChoiceSuggestions = false,
+  choices = null, choicesVisible = true, onToggleChoicesVisible,
+  hasPlayerTurn = false,
+  suppressInlineChoicesWait = false,
+}) {
   const { t } = useI18n()
   const [text, setText] = useState('')
-  const [type, setType] = useState('DO')
   const [mentionState, setMentionState] = useState(null)
   const [mentionResults, setMentionResults] = useState([])
   const [mentionIndex, setMentionIndex] = useState(0)
-  const textareaRef = useRef(null)
+  const inputRef = useRef(null)
   const dropdownRef = useRef(null)
   const campaignId = useGameStore((s) => s.activeCampaignId)
 
   const inputLocked = disabled || awaitingNarrator || recoveryBlocking
 
-  const ACTION_TYPES = [
-    { id: 'DO', labelKey: 'action.do', hintKey: 'action.doHint' },
-    { id: 'SAY', labelKey: 'action.say', hintKey: 'action.sayHint' },
-    { id: 'CONTINUE', labelKey: 'action.continue', hintKey: 'action.continueHint' },
-    { id: 'META', labelKey: 'action.meta', hintKey: 'action.metaHint' },
-  ]
-
-  // Ctrl+Enter to continue
   useEffect(() => {
     const handleGlobalKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        if (!text.trim() && !inputLocked) {
-          e.preventDefault()
-          onSubmit('[CONTINUE]')
-        }
+        if (!inputLocked && text.trim()) { e.preventDefault(); handleSubmit() }
       }
     }
     window.addEventListener('keydown', handleGlobalKey)
     return () => window.removeEventListener('keydown', handleGlobalKey)
-  }, [text, inputLocked, onSubmit])
+  }, [text, inputLocked])
 
   const fetchCharacters = async (query) => {
     try {
       const res = await fetch(`/api/game/${campaignId}/characters?q=${encodeURIComponent(query)}`)
       if (!res.ok) return []
       return res.json()
-    } catch {
-      return []
-    }
+    } catch { return [] }
   }
 
   useEffect(() => {
@@ -1366,7 +1502,7 @@ function ActionInputRedesigned({ onSubmit, disabled, awaitingNarrator = false, r
     const after = text.slice(mentionState.startIndex + mentionState.query.length + 1)
     setText(`${before}@${charName}${after}`)
     closeMention()
-    setTimeout(() => textareaRef.current?.focus(), 0)
+    setTimeout(() => inputRef.current?.focus(), 0)
   }
 
   const handleTextChange = (e) => {
@@ -1384,10 +1520,15 @@ function ActionInputRedesigned({ onSubmit, disabled, awaitingNarrator = false, r
     if (inputLocked) return
     if (mentionState && mentionResults.length > 0) return
     const trimmed = text.trim()
-    if (!trimmed && type !== 'CONTINUE') return
-    onSubmit(type === 'CONTINUE' ? '[CONTINUE]' : `[${type}] ${trimmed}`)
+    if (!trimmed) return
+    onSubmit(trimmed)
     setText('')
     closeMention()
+  }
+
+  const handleChoiceClick = (choice) => {
+    if (inputLocked) return
+    onSubmit(choice.label)
   }
 
   const handleKeyDown = (e) => {
@@ -1406,80 +1547,195 @@ function ActionInputRedesigned({ onSubmit, disabled, awaitingNarrator = false, r
     return t('action.placeholder.waiting')
   }
 
-  return (
-    <form onSubmit={handleSubmit} className="py-4 space-y-3">
-      {/* Action type pills */}
-      <div className="flex gap-1.5 flex-wrap">
-        {ACTION_TYPES.map((a) => {
-          const isActive = type === a.id
-          return (
-            <button
-              key={a.id}
-              type="button"
-              disabled={inputLocked}
-              onClick={() => { if (inputLocked) return; setType(a.id); if (a.id === 'CONTINUE') setText('') }}
-              className={`
-                px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-widest transition-all duration-150 border
-                ${isActive
-                  ? 'bg-[var(--accent-muted)] text-[var(--text-primary)] border-[var(--border-strong)]'
-                  : 'bg-transparent text-[var(--text-tertiary)] border-transparent hover:text-[var(--text-secondary)] hover:bg-[var(--accent-muted)]'
-                }
-              `}
-              title={t(a.hintKey)}
-            >
-              {t(a.labelKey)}
-            </button>
-          )
-        })}
-        <div className="flex-1" />
-        <span className="text-[10px] text-[var(--text-disabled)] self-center pr-1 hidden sm:block">
-          {t('action.continueKey')}
-        </span>
-      </div>
+  const catColor = {
+    COMBAT:     { bg: 'bg-red-950/40',    border: 'border-red-800/50',    hover: 'hover:bg-red-900/50 hover:border-red-600/70',     iconBg: 'bg-red-900/60',    iconText: 'text-red-400' },
+    DIALOGUE:   { bg: 'bg-blue-950/40',   border: 'border-blue-800/50',   hover: 'hover:bg-blue-900/50 hover:border-blue-600/70',   iconBg: 'bg-blue-900/60',   iconText: 'text-blue-400' },
+    INVESTIGATE:{ bg: 'bg-yellow-950/40', border: 'border-yellow-800/50',  hover: 'hover:bg-yellow-900/50 hover:border-yellow-600/70',iconBg: 'bg-yellow-900/60', iconText: 'text-yellow-400' },
+    EVADE:      { bg: 'bg-green-950/40',   border: 'border-green-800/50',  hover: 'hover:bg-green-900/50 hover:border-green-600/70',  iconBg: 'bg-green-900/60',   iconText: 'text-green-400' },
+    ITEM:       { bg: 'bg-purple-950/40', border: 'border-purple-800/50', hover: 'hover:bg-purple-900/50 hover:border-purple-600/70',iconBg:'bg-purple-900/60', iconText:'text-purple-400' },
+    SOCIAL:     { bg: 'bg-pink-950/40',   border: 'border-pink-800/50',   hover: 'hover:bg-pink-900/50 hover:border-pink-600/70',   iconBg: 'bg-pink-900/60',   iconText: 'text-pink-400' },
+    ENVIRONMENT:{ bg: 'bg-orange-950/40', border: 'border-orange-800/50',  hover: 'hover:bg-orange-900/50 hover:border-orange-600/70',iconBg: 'bg-orange-900/60',  iconText: 'text-orange-400' },
+    STEALTH:    { bg: 'bg-slate-950/40',  border: 'border-slate-700/50',  hover: 'hover:bg-slate-800/50 hover:border-slate-500/70',  iconBg: 'bg-slate-800/60',  iconText: 'text-slate-400' },
+    EMOTION:    { bg: 'bg-rose-950/40',   border: 'border-rose-800/50',   hover: 'hover:bg-rose-900/50 hover:border-rose-600/70',   iconBg: 'bg-rose-900/60',   iconText: 'text-rose-400' },
+  }
 
-      {/* Input row */}
-      <div className="flex gap-3 items-end">
-        {type === 'CONTINUE' ? (
+  // ── Choice Tab State ────────────────────────────────────────────────────────
+  const CHOICE_TABS = [
+    { id: 'QUICK',    label: 'Nhanh' },
+    { id: 'STANDARD', label: 'Chuẩn' },
+    { id: 'ADVANCED', label: 'Cao Cấp' },
+  ]
+  const TAB_MEMBERS = {
+    QUICK:    ['COMBAT', 'EVADE', 'STEALTH'],
+    STANDARD: ['DIALOGUE', 'INVESTIGATE', 'ITEM'],
+    ADVANCED: ['SOCIAL', 'EMOTION', 'ENVIRONMENT'],
+  }
+  const [activeTab, setActiveTab] = useState(CHOICE_TABS[0].id)
+
+  const choicesInTab = (() => {
+    if (!choices) return []
+    const members = TAB_MEMBERS[activeTab] || []
+    return choices.filter((c) => members.includes(c.category_id))
+  })()
+
+  // Chỉ màn "mở đầu": chưa có tin nhắn người chơi — không dùng `!choices` một mình (giữa trận
+  // khi đang poll gợi ý, choices tạm null nhưng đã có lượt → không được hiện Tiếp tục + hint mở đầu).
+  const isPreGame = !choices && !inputLocked && !hasPlayerTurn
+
+  return (
+    <form onSubmit={handleSubmit} className="py-3 sm:py-4 space-y-3 flex flex-col">
+
+      {/* ── Waiting state (trùng banner sticky trong khung cuộn → chỉ giữ một chỗ) ── */}
+      {!suppressInlineChoicesWait && waitingForChoiceSuggestions && (!choices || choices.length === 0) && (
+        <div className="flex items-center justify-center gap-3 py-4 order-first">
+          <div className="flex gap-1">
+            {[0,1,2].map((i) => (
+              <div key={i} className="w-1.5 h-1.5 rounded-full bg-[var(--text-disabled)] animate-pulse"
+                style={{ animationDelay: `${i * 160}ms` }} />
+            ))}
+          </div>
+          <span className="text-[11px] text-[var(--text-tertiary)] italic">
+            {t('status.waitingChoices')}
+          </span>
+        </div>
+      )}
+
+      {/* ── Pre-game: prominent Tiếp tục button ── */}
+      {isPreGame && (
+        <div className="flex flex-col items-center gap-3 py-2">
+          <p className="text-[11px] text-[var(--text-tertiary)] italic">
+            {t ? t('choices.preGameHint') : 'Opening complete — begin your journey.'}
+          </p>
           <button
             type="button"
-            onClick={handleSubmit}
-            disabled={inputLocked}
-            className="flex-1 text-left px-4 py-3 rounded-xl bg-[var(--accent-muted)] border border-[var(--border-default)] text-[var(--text-secondary)] hover:border-[var(--border-strong)] transition-all text-sm font-light cursor-pointer disabled:opacity-50"
+            onClick={() => onSubmit('[CONTINUE]')}
+            className="
+              w-full max-w-xs px-8 py-4 rounded-2xl
+              bg-[rgba(200,200,216,0.12)] border border-[rgba(200,200,216,0.3)]
+              text-[var(--text-primary)] text-sm font-semibold
+              hover:bg-[rgba(200,200,216,0.2)] hover:border-[rgba(200,200,216,0.5)]
+              active:scale-95 transition-all cursor-pointer
+            "
           >
-            {inputLocked ? lockedPlaceholder() : t('action.placeholder.continue')}
+            {t ? t('choices.continueBtn') : 'Tiếp tục'}
           </button>
-        ) : (
+        </div>
+      )}
+
+      {/* ── Tabs + Cards (always above input when choices exist and not streaming) ── */}
+      {choices && choices.length > 0 && !disabled && (
+        <div className="space-y-2">
+          {/* Show / Hide toggle */}
+          {!choicesVisible && (
+            <button
+              type="button"
+              onClick={onToggleChoicesVisible}
+              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-dashed border-[var(--border-subtle)] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] hover:border-[var(--border-default)] hover:bg-[var(--accent-muted)] transition-all text-xs font-medium"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              {t ? t('choices.show', { count: choices.length }) : `Hiện ${choices.length} hành động`}
+            </button>
+          )}
+          {/* Tab Bar + Hide button (only when visible) */}
+          {choicesVisible && (
+          <div className="flex items-center justify-between">
+            <div className="flex gap-1 overflow-x-auto pb-0.5">
+              {CHOICE_TABS.map((tab) => {
+                const members = TAB_MEMBERS[tab.id] || []
+                const count = choices.filter((c) => members.includes(c.category_id)).length
+                const isActive = activeTab === tab.id
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`
+                      flex-shrink-0 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg
+                      text-[11px] font-semibold transition-all duration-150 whitespace-nowrap
+                      ${isActive
+                        ? 'bg-[var(--accent-muted)] border border-[var(--accent)] text-[var(--text-primary)]'
+                        : 'bg-transparent border border-transparent text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] hover:border-[var(--border-default)]'
+                      }
+                    `}
+                  >
+                    <span>{tab.label}</span>
+                    <span className={`
+                      w-4 h-4 rounded-full text-[8px] font-bold flex items-center justify-center
+                      ${isActive ? 'bg-[var(--accent)] text-white' : 'bg-[var(--surface-3)] text-[var(--text-disabled)]'}
+                    `}>{count}</span>
+                  </button>
+                )
+              })}
+            </div>
+            <button onClick={onToggleChoicesVisible} type="button"
+              className="text-[10px] text-[var(--text-disabled)] hover:text-[var(--text-tertiary)] transition-colors shrink-0 ml-2">
+              {t ? t('choices.hide') : 'Ẩn'}
+            </button>
+          </div>
+          )}
+
+          {/* Cards for active tab */}
+          {choicesVisible && choicesInTab.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {choicesInTab.map((choice) => {
+                const c = catColor[choice.category_id] || catColor.COMBAT
+                return (
+                  <button key={choice.slot} type="button"
+                    onClick={() => handleChoiceClick(choice)}
+                    disabled={inputLocked}
+                    className={`
+                      flex flex-col gap-1.5 p-3 rounded-xl border
+                      ${c.bg} ${c.border} ${c.hover}
+                      transition-all duration-150 cursor-pointer text-left
+                      ${inputLocked ? 'opacity-40 cursor-not-allowed' : ''}
+                    `}>
+                    <div className="flex items-center gap-2">
+                      <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-base flex-shrink-0 ${c.iconBg} ${c.iconText}`}>
+                        {choice.icon}
+                      </span>
+                      <span className={`text-[9px] uppercase tracking-widest font-bold ${c.iconText} opacity-70`}>
+                        {choice.category_id}
+                      </span>
+                    </div>
+                    <div className="text-xs font-semibold text-[var(--text-primary)] leading-snug line-clamp-2">
+                      {choice.label}
+                    </div>
+                    {choice.hint && (
+                      <div className="text-[10px] text-[var(--text-tertiary)] leading-snug line-clamp-2 opacity-70">
+                        {choice.hint}
+                      </div>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Input bar (only shown when choices exist and not streaming) ── */}
+      {choices && choices.length > 0 && !disabled && (
+        <div className="flex gap-2 items-center mt-3">
           <div className="flex-1 relative">
-            <textarea
-              ref={textareaRef}
-              value={text}
-              onChange={handleTextChange}
-              onKeyDown={handleKeyDown}
-              disabled={inputLocked}
-              placeholder={inputLocked ? lockedPlaceholder() : t(`action.placeholder.${type.toLowerCase()}`)}
-              rows={2}
-              className={`
-                w-full rounded-xl px-4 py-3 text-sm font-light leading-relaxed resize-none
+            <input
+              ref={inputRef} value={text} onChange={handleTextChange}
+              onKeyDown={handleKeyDown} disabled={inputLocked}
+              placeholder={inputLocked ? lockedPlaceholder() : (t ? t('action.placeholder.freeText') : 'Nhập hành động…')}
+              className="
+                w-full rounded-xl px-4 py-2.5 text-sm font-light
                 bg-[var(--accent-muted)] border border-[var(--border-default)]
                 text-[var(--text-primary)] placeholder-[var(--text-disabled)]
                 focus:outline-none focus:border-[var(--border-focus)] focus:bg-[var(--accent-glow)]
                 transition-all
-                ${type === 'META' ? 'font-mono' : ''}
-              `}
+              "
             />
-            {/* @ mention dropdown */}
             {mentionState && mentionResults.length > 0 && (
-              <div ref={dropdownRef} className="absolute bottom-full left-0 mb-2 w-64 max-h-48 overflow-y-auto scrollbar bg-[var(--bg-overlay)] border border-[var(--border-default)] rounded-xl shadow-[var(--shadow-lg)] z-50">
+              <div ref={dropdownRef}
+                className="absolute bottom-full left-0 mb-2 w-64 max-h-48 overflow-y-auto scrollbar bg-[var(--bg-overlay)] border border-[var(--border-default)] rounded-xl shadow-[var(--shadow-lg)] z-50">
                 {mentionResults.map((char, i) => (
-                  <button
-                    key={char.name}
-                    type="button"
-                    onClick={() => insertMention(char.name)}
-                    className={`
-                      w-full text-left px-4 py-2.5 text-sm flex items-center gap-3 transition-colors
-                      ${i === mentionIndex ? 'bg-[var(--accent-muted)] text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--accent-muted)]'}
-                    `}
-                  >
+                  <button key={char.name} type="button" onClick={() => insertMention(char.name)}
+                    className={`w-full text-left px-4 py-2.5 text-sm flex items-center gap-3 transition-colors
+                      ${i === mentionIndex ? 'bg-[var(--accent-muted)] text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:bg-[var(--accent-muted)]'}`}>
                     <span className="text-indigo-400 text-xs font-mono">@</span>
                     <div className="min-w-0">
                       <div className="font-medium truncate">{char.name}</div>
@@ -1491,26 +1747,23 @@ function ActionInputRedesigned({ onSubmit, disabled, awaitingNarrator = false, r
               </div>
             )}
           </div>
-        )}
-        <button
-          type="submit"
-          disabled={inputLocked || (type !== 'CONTINUE' && !text.trim())}
-          className={`
-            flex items-center justify-center w-12 h-12 rounded-xl flex-shrink-0
-            border transition-all duration-150
-            ${(inputLocked || (type !== 'CONTINUE' && !text.trim()))
-              ? 'bg-[var(--accent-muted)] border-[var(--border-subtle)] text-[var(--text-disabled)] cursor-not-allowed'
-              : 'bg-[rgba(200,200,216,0.15)] border-[rgba(200,200,216,0.32)] text-[var(--text-primary)] hover:bg-[rgba(200,200,216,0.22)] hover:border-[rgba(200,200,216,0.48)] cursor-pointer'
-            }
-          `}
-          title={t('generic.send')}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="22" y1="2" x2="11" y2="13" />
-            <polygon points="22 2 15 22 11 13 2 9 22 2" />
-          </svg>
-        </button>
-      </div>
+          <button type="submit"
+            disabled={inputLocked || !text.trim()}
+            className={`
+              self-center flex items-center justify-center w-11 h-11 rounded-xl flex-shrink-0 border transition-all duration-150
+              ${(inputLocked || !text.trim())
+                ? 'bg-[var(--accent-muted)] border-[var(--border-subtle)] text-[var(--text-disabled)] cursor-not-allowed'
+                : 'bg-[rgba(200,200,216,0.15)] border-[rgba(200,200,216,0.32)] text-[var(--text-primary)] hover:bg-[rgba(200,200,216,0.22)] hover:border-[rgba(200,200,216,0.48)] cursor-pointer active:scale-95'
+              }
+            `}
+            title={t ? t('generic.send') : 'Gửi'}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
+            </svg>
+          </button>
+        </div>
+      )}
+
     </form>
   )
 }

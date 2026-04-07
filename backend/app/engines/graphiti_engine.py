@@ -15,10 +15,10 @@ logger = logging.getLogger(__name__)
 class GraphitiEngine:
     """Thin wrapper around Graphiti for RPG narrative episode ingestion."""
 
-    def __init__(self, neo4j_uri: str, neo4j_user: str, neo4j_password: str):
+    def __init__(self, neo4j_uri: str, neo4j_user: str, neo4j_password: str, openai_key: str = ""):
         if Graphiti is None:
             raise ImportError("graphiti-core is not installed")
-        self._graphiti = Graphiti(neo4j_uri, neo4j_user, neo4j_password)
+        self._graphiti = Graphiti(neo4j_uri, neo4j_user, neo4j_password, openai_key=openai_key)
 
     async def initialize(self):
         """Build Graphiti indices and constraints. Call once on startup."""

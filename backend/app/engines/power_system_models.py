@@ -57,6 +57,7 @@ class Stage:
     stage_style: StageStyle = StageStyle.NONE
     sub_stages: tuple[SubStage, ...] = field(default_factory=tuple)
     weight: float = 1.0  # relative importance vs other stages in same axis
+    description: str = ""  # flavour text for this specific stage
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,7 @@ def stage_to_dict(s: Stage) -> dict:
         "stage_style": s.stage_style.value,
         "sub_stages": [sub_stage_to_dict(ss) for ss in s.sub_stages],
         "weight": s.weight,
+        "description": s.description,
     }
 
 
@@ -148,6 +150,7 @@ def dict_to_stage(d: dict | str) -> Stage:
         stage_style=style,
         sub_stages=tuple(sub_list),
         weight=d.get("weight", 1.0),
+        description=d.get("description", ""),
     )
 
 

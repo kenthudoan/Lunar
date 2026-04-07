@@ -25,13 +25,6 @@ function stageStyleLabel(opt, language) {
   return language === 'vi' ? opt.labelVi : opt.labelEn
 }
 
-const STAGE_STYLE_OPTIONS = [
-  { value: 'early_mid_late', labelVi: 'Sơ / Trung / Hậu', labelEn: 'Early / Mid / Late' },
-  { value: 'named_step',     labelVi: 'Cấp có tên',       labelEn: 'Named tiers' },
-  { value: 'numeric_step',   labelVi: 'Số (1, 2, 3…)',   labelEn: 'Numeric' },
-  { value: 'none',           labelVi: 'Không chia nhỏ',   labelEn: 'No sub-tiers' },
-]
-
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function uid() {
@@ -134,7 +127,7 @@ function SubTierChip({ sub, onRename, disabled }) {
   useEffect(() => { setVal(sub.name) }, [sub.name])
 
   return (
-    <div className="flex items-center gap-1 group">
+    <div className="flex items-center gap-1.5 group">
       {editing ? (
         <input
           autoFocus
@@ -142,12 +135,12 @@ function SubTierChip({ sub, onRename, disabled }) {
           onChange={e => setVal(e.target.value)}
           onBlur={() => { setEditing(false); onRename(val) }}
           onKeyDown={e => { if (e.key === 'Enter') { setEditing(false); onRename(val) } }}
-          className="input text-[10px] py-0.5 px-1.5 w-20 bg-[var(--bg-base)]"
+          className="input text-xs py-1 px-2 w-28 bg-[var(--bg-base)]"
         />
       ) : (
         <span
           onClick={() => !disabled && setEditing(true)}
-          className={`text-[10px] px-2 py-0.5 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] ${!disabled ? 'hover:border-[var(--accent)] cursor-pointer' : 'opacity-60'}`}
+          className={`text-xs px-2.5 py-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] ${!disabled ? 'hover:border-[var(--accent)] cursor-pointer' : 'opacity-60'}`}
         >
           {sub.name}
         </span>
@@ -175,7 +168,7 @@ function StageRow({ stage, index, language, onChange, onRemove, disabled }) {
   return (
     <div className="relative">
       {/* Name row + compact style select (dropdown label is not the stage name) */}
-      <div className={`flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-2 px-3 py-2 rounded-xl border transition-all ${
+      <div className={`flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-2 px-3 py-2.5 rounded-xl border transition-all ${
         expanded
           ? 'border-[var(--accent)] bg-[var(--bg-elevated)]'
           : 'border-[var(--border-subtle)] bg-[var(--bg-base)] hover:border-[var(--border-default)]'
@@ -185,20 +178,20 @@ function StageRow({ stage, index, language, onChange, onRemove, disabled }) {
             <button
               type="button"
               onClick={() => setExpanded(v => !v)}
-              className="flex-shrink-0 w-5 h-5 rounded flex items-center justify-center text-[10px] text-[var(--text-disabled)] hover:text-[var(--accent)] transition-colors"
+              className="flex-shrink-0 w-6 h-6 rounded flex items-center justify-center text-[var(--text-disabled)] hover:text-[var(--accent)] transition-colors"
             >
               <svg
-                width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+                width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
                 style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}
               >
                 <polyline points="9 18 15 12 9 6"/>
               </svg>
             </button>
           ) : (
-            <div className="w-5 flex-shrink-0" />
+            <div className="w-6 flex-shrink-0" />
           )}
 
-          <span className="text-[9px] font-mono text-[var(--text-disabled)] w-3 text-right flex-shrink-0">
+          <span className="text-xs font-mono text-[var(--text-disabled)] w-4 text-right flex-shrink-0">
             {index + 1}
           </span>
 
@@ -206,7 +199,7 @@ function StageRow({ stage, index, language, onChange, onRemove, disabled }) {
             value={displayValue}
             onChange={e => onChange({ ...stage, name: e.target.value })}
             disabled={disabled}
-            className="input text-xs font-medium min-w-0 flex-1 bg-[var(--bg-base)] sm:bg-transparent border border-[var(--border-subtle)] sm:border-none rounded-lg sm:rounded-none px-2 py-1 sm:p-0 shadow-none focus:ring-1 focus:ring-[var(--accent)] sm:focus:ring-0"
+            className="input text-sm font-medium min-w-0 flex-1 bg-[var(--bg-base)] sm:bg-transparent border border-[var(--border-subtle)] sm:border-none rounded-lg px-2 py-1 sm:p-0 shadow-none focus:ring-1 focus:ring-[var(--accent)] sm:focus:ring-0"
             placeholder={language === 'vi' ? 'Tên cấp (VD: Trúc Cơ)' : 'Stage name (e.g. Foundation)'}
           />
         </div>
@@ -217,7 +210,7 @@ function StageRow({ stage, index, language, onChange, onRemove, disabled }) {
             onChange={e => handleStyleChange(e.target.value)}
             disabled={disabled}
             title={language === 'vi' ? 'Kiểu chia nhỏ trong cấp' : 'Sub-tier style'}
-            className="input text-[9px] py-1.5 px-2 w-full sm:w-auto sm:max-w-[10rem] bg-[var(--bg-base)] border border-[var(--border-subtle)] rounded-lg"
+            className="input text-xs py-1.5 px-2.5 w-full sm:w-auto sm:max-w-[10rem] bg-[var(--bg-base)] border border-[var(--border-subtle)] rounded-lg"
           >
             {STAGE_STYLE_OPTIONS.map(o => (
               <option key={o.value} value={o.value}>{stageStyleLabel(o, language)}</option>
@@ -230,7 +223,7 @@ function StageRow({ stage, index, language, onChange, onRemove, disabled }) {
               onClick={onRemove}
               className="text-[var(--text-disabled)] hover:text-[var(--error)] transition-colors flex-shrink-0 p-1"
             >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
               </svg>
             </button>
@@ -240,8 +233,8 @@ function StageRow({ stage, index, language, onChange, onRemove, disabled }) {
 
       {/* Expanded: show sub-stages inline */}
       {expanded && hasSubs && (
-        <div className="mt-1 ml-8 mr-2 p-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-base)]">
-          <div className="flex flex-wrap gap-1.5">
+        <div className="mt-1 ml-8 mr-2 p-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-base)]">
+          <div className="flex flex-wrap gap-2">
             {stage.sub_stages.map((sub, si) => (
               <SubTierChip
                 key={sub.key || si}
@@ -302,17 +295,17 @@ function AxisCard({ axis, index, allAxes, language, onChange, onRemove, disabled
         {/* Collapsed: show axis name + preview */}
         <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setCollapsed(v => !v)}>
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-[var(--text-primary)] truncate">
+            <span className="text-sm font-semibold text-[var(--text-primary)] truncate">
               {axis.axis_name || (language === 'vi' ? 'Trục không tên' : 'Unnamed Axis')}
             </span>
             {!axis.visible && (
-              <span className="text-[9px] px-1.5 py-0.5 rounded-full border border-[var(--border-subtle)] text-[var(--text-disabled)] shrink-0">
+              <span className="text-[10px] px-2 py-0.5 rounded-full border border-[var(--border-subtle)] text-[var(--text-disabled)] shrink-0">
                 🔒 AI
               </span>
             )}
           </div>
           {!collapsed && (
-            <div className="text-[10px] text-[var(--text-disabled)] mt-0.5 truncate">
+            <div className="text-xs text-[var(--text-disabled)] mt-0.5 truncate">
               {previewStages.join(' › ')}
             </div>
           )}
@@ -388,24 +381,26 @@ function AxisCard({ axis, index, allAxes, language, onChange, onRemove, disabled
           </div>
 
           {/* Weight */}
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-[9px] text-[var(--text-disabled)] w-10 shrink-0">
+          <div className="mb-2">
+            <label className="text-[9px] text-[var(--text-disabled)] mb-0.5 block font-medium">
               {language === 'vi' ? 'Trọng số' : 'Weight'}
-            </span>
-            <input
-              type="range" min="0.1" max="2" step="0.1"
-              value={axis.weight}
-              onChange={e => onChange({ ...axis, weight: parseFloat(e.target.value) })}
-              disabled={disabled}
-              className="flex-1 accent-[var(--accent)]"
-            />
-            <span className="text-[9px] font-mono text-[var(--text-secondary)] w-6 text-right">{axis.weight.toFixed(1)}</span>
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min="0.1" max="2" step="0.1"
+                value={axis.weight}
+                onChange={e => onChange({ ...axis, weight: parseFloat(e.target.value) })}
+                disabled={disabled}
+                className="flex-1 accent-[var(--accent)]"
+              />
+              <span className="text-[9px] font-mono text-[var(--text-secondary)] w-6 text-right">{axis.weight.toFixed(1)}</span>
+            </div>
           </div>
 
           {/* Stages */}
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             <div className="flex items-center justify-between px-1">
-              <span className="text-[9px] font-semibold text-[var(--text-disabled)] uppercase tracking-wider">
+              <span className="text-xs font-semibold text-[var(--text-disabled)] uppercase tracking-wider">
                 {language === 'vi' ? 'Cấp Bậc' : 'Stages'}
               </span>
               {!disabled && (
@@ -477,7 +472,7 @@ function PreviewPanel({ data, language }) {
       </div>
 
       {/* All axis bars */}
-      <div className="space-y-2">
+      <div className="space-y-3">
         {visibleAxes.map((axis, ai) => {
           const stagesWithSubs = axis.stages.filter(s => s.sub_stages?.length > 0)
           const stagesWithoutSubs = axis.stages.filter(s => !s.sub_stages?.length || s.sub_stages.length === 0)
@@ -485,26 +480,26 @@ function PreviewPanel({ data, language }) {
           const maxRaw = axis.normalization_max || 100
 
           return (
-            <div key={axis.axis_id || ai} className="space-y-1">
+            <div key={axis.axis_id || ai} className="space-y-1.5">
               {/* Axis name + primary badge */}
               <div className="flex items-center gap-1.5">
                 {axis.is_primary && (
-                  <svg width="8" height="8" viewBox="0 0 24 24" fill="var(--warning)" className="flex-shrink-0">
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="var(--warning)" className="flex-shrink-0">
                     <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
                   </svg>
                 )}
-                <span className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider">
+                <span className="text-sm font-semibold text-[var(--text-secondary)] uppercase tracking-wider">
                   {axis.axis_name}
                 </span>
               </div>
 
               {/* Stage chips */}
               {stagesWithoutSubs.length > 0 && (
-                <div className="flex flex-wrap gap-1">
+                <div className="flex flex-wrap gap-1.5">
                   {stagesWithoutSubs.map((s, si) => (
                     <span
                       key={si}
-                      className="text-[10px] px-2 py-0.5 rounded-lg border border-[var(--border-default)] bg-[var(--bg-elevated)] text-[var(--text-secondary)]"
+                      className="text-sm px-3 py-1 rounded-lg border border-[var(--border-default)] bg-[var(--bg-elevated)] text-[var(--text-secondary)]"
                     >
                       {s.name}
                     </span>
@@ -514,17 +509,17 @@ function PreviewPanel({ data, language }) {
 
               {/* Sub-tiers per stage */}
               {stagesWithSubs.length > 0 && (
-                <div className="space-y-1">
+                <div className="space-y-1.5">
                   {stagesWithSubs.map((stage, si) => (
                     <div key={si} className="flex items-center gap-2">
-                      <span className="text-[9px] font-medium text-[var(--text-secondary)] w-20 shrink-0 truncate">
+                      <span className="text-xs font-medium text-[var(--text-secondary)] w-24 shrink-0 truncate">
                         {stage.name}
                       </span>
-                      <div className="flex flex-wrap gap-1">
+                      <div className="flex flex-wrap gap-1.5">
                         {stage.sub_stages.map((sub, si2) => (
                           <span
                             key={si2}
-                            className="text-[9px] px-1.5 py-0.5 rounded border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-disabled)]"
+                            className="text-xs px-2.5 py-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)]"
                           >
                             {sub.name}
                           </span>
@@ -771,7 +766,7 @@ export default function PowerSystemEditor({
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
           </svg>
-          <span className="text-sm font-semibold text-[var(--text-primary)]">{t('title')}</span>
+          <span className="text-base font-bold text-[var(--text-primary)]">{t('title')}</span>
           {locked && (
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[var(--text-disabled)]">
               🔒 {lang === 'vi' ? 'Đã khóa' : 'Locked'}

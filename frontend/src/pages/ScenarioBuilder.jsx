@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useI18n } from '../i18n'
 import { resolveEntityValue } from '../i18n/index.js'
-import { createScenario, importScenario, expandScenario, updateScenario, createCampaign, addStoryCard, getStoryCards } from '../api'
+import { createScenario, importScenario, expandScenario, updateScenario, createCampaign, addStoryCard, getStoryCards, deleteStoryCard } from '../api'
 import RankListView from '../components/RankListView'
 import { otherGenresPartA } from '../data/scenarioGenrePresets.restA'
 import { otherGenresPartB } from '../data/scenarioGenrePresets.restB'
@@ -202,6 +202,17 @@ export default function ScenarioBuilder() {
   const isAdding = editTarget && editTarget._new
   const isEditing = editTarget && !editTarget._new
 
+  /** Badge for Cấp Bậc tab: ranks live in powerSystemDraft, not in entities (expander drops type rank). */
+  const rankPowerSystemCount = (() => {
+    const axes = powerSystemDraft?.axes
+    if (!Array.isArray(axes) || axes.length === 0) return 0
+    const totalStages = axes.reduce(
+      (sum, a) => sum + (Array.isArray(a.stages) ? a.stages.length : 0),
+      0,
+    )
+    return totalStages > 0 ? totalStages : axes.length
+  })()
+
   const getEntityLabel = (type) => {
     const def = ENTITY_TYPES.find((d) => d.key === type)
     return def ? t(def.labelKey) : type
@@ -385,22 +396,25 @@ export default function ScenarioBuilder() {
   }
 
   const _syncEntitiesToCards = async (sid) => {
-    // Delete existing cards for this scenario
-    const existing = await getStoryCards(sid)
-    // No delete endpoint needed for simplicity — we'll overwrite via scenario.recreate approach
-    // For now, just add new ones (duplicates are acceptable on re-edit; user can delete extras)
-    for (const e of entities) {
-      if (!e.name?.trim()) continue
-      const content = {}
-      Object.entries(e).forEach(([k, v]) => {
-        if (k !== 'type' && k !== '_id' && k !== 'name' && v !== undefined && v !== null && String(v).trim()) {
-          content[k] = v
-        }
-      })
-      // Map frontend entity type key to StoryCardType value
-      const typeMap = { rank: 'RANK', faction: 'FACTION', secret: 'LORE', location: 'LOCATION', npc: 'NPC', item: 'ITEM' }
-      const cardType = typeMap[e.type] || 'LORE'
-      await addStoryCard(sid, { card_type: cardType, name: e.name, content })
+    try {
+      const existing = await getStoryCards(sid)
+      const validExisting = existing.filter((c) => c.id)
+      await Promise.all(validExisting.map((c) => deleteStoryCard(sid, c.id)))
+      for (const e of entities) {
+        if (!e.name?.trim()) continue
+        const content = {}
+        Object.entries(e).forEach(([k, v]) => {
+          if (k !== 'type' && k !== '_id' && k !== 'name' && v !== undefined && v !== null && String(v).trim()) {
+            content[k] = v
+          }
+        })
+        const typeMap = { rank: 'RANK', faction: 'FACTION', secret: 'LORE', location: 'LOCATION', npc: 'NPC', item: 'ITEM' }
+        const cardType = typeMap[e.type] || 'LORE'
+        await addStoryCard(sid, { card_type: cardType, name: e.name, content })
+      }
+    } catch (err) {
+      // Non-fatal: scenario is already saved; just log to console so we don't crash the UI
+      console.warn('[ScenarioBuilder] Failed to sync entities to cards:', err)
     }
   }
 
@@ -411,7 +425,7 @@ export default function ScenarioBuilder() {
       const finalForm = buildFinalForm()
       if (isEditMode) {
         await updateScenario(scenarioId, finalForm)
-        await _syncEntitiesToCards(scenarioId)
+        try { await _syncEntitiesToCards(scenarioId) } catch (e) { console.warn(e) }
         navigate('/')
       } else if (importPayload) {
         const imported = await importScenario({ ...importPayload, scenario: { ...finalForm } })
@@ -423,8 +437,13 @@ export default function ScenarioBuilder() {
         const { campaign } = await createCampaign(saved.id, adventureName || undefined)
         navigate(`/play/${campaign.id}`)
       }
-    } catch {
-      setError(t('error.backendOffline'))
+    } catch (err) {
+      // Preserve scenario save success; only surface sync errors
+      if (isEditMode) {
+        setError(err?.message || t('error.backendOffline'))
+      } else {
+        setError(t('error.backendOffline'))
+      }
     } finally {
       setLoading(false)
     }
@@ -788,7 +807,10 @@ export default function ScenarioBuilder() {
                 </p>
                 <div className="flex items-center gap-2 flex-wrap">
                   {ENTITY_TYPES.map((et) => {
-                    const count = entities.filter((e) => e.type === et.key).length
+                    const count =
+                      et.key === 'rank'
+                        ? rankPowerSystemCount
+                        : entities.filter((e) => e.type === et.key).length
                     const active = activeEntityType === et.key
                     return (
                       <button key={et.key} type="button"

@@ -21,13 +21,29 @@ const mentionComponents = {
 
 export default function NarrativeBlock({ content, isStreaming = false, combatMode = false }) {
   const cleaned = stripPowerControlTags(String(content || '')).replace(INTERNAL_TAG_STRIP_REGEX, '')
+  const cursor = isStreaming ? (
+    <span className={`inline-block w-1.5 h-4 ml-1 align-middle animate-cursor ${combatMode ? 'bg-[var(--combat-text)]' : 'bg-[var(--accent)]'}`} />
+  ) : null
 
+  const paragraphs = cleaned.split(/\n{2,}/).filter(Boolean)
+
+  if (paragraphs.length === 0) {
+    return (
+      <div className="prose-lunar">
+        {cursor}
+      </div>
+    )
+  }
+
+  const lastIdx = paragraphs.length - 1
   return (
     <div className="prose-lunar">
-      <ReactMarkdown components={mentionComponents}>{cleaned}</ReactMarkdown>
-      {isStreaming && (
-        <span className={`inline-block w-1.5 h-4 ml-1 align-middle animate-pulse ${combatMode ? 'bg-[var(--combat-text)]' : 'bg-[var(--accent)] opacity-50'}`} />
-      )}
+      {paragraphs.map((para, i) => {
+        if (i < lastIdx) {
+          return <p key={i}>{processChildren(para)}</p>
+        }
+        return <p key={i}>{processChildren(para)}{cursor}</p>
+      })}
     </div>
   )
 }

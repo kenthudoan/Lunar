@@ -14,12 +14,14 @@ class WorldNodeType(str, Enum):
     FACTION = "FACTION"
     ITEM = "ITEM"
     EVENT = "EVENT"
+    ENTITY = "ENTITY"  # generic / unclassified entity
+    RANK = "RANK"      # rank system nodes (hidden from World Map)
 
 
 @dataclass
 class WorldNode:
     id: str
-    node_type: WorldNodeType
+    node_type: WorldNodeType | None
     name: str
     attributes: dict
     campaign_id: str
@@ -46,7 +48,7 @@ class GraphEngine:
 
     async def add_node(
         self,
-        node_type: WorldNodeType,
+        node_type: WorldNodeType | None,
         name: str,
         attributes: dict,
     ) -> WorldNode:
@@ -71,6 +73,8 @@ class GraphEngine:
                 if converted != str(raw):
                     normalized_attrs[slug_field] = converted
         node_id = str(uuid.uuid4())
+        # Normalize node_type: None → WorldNodeType.ENTITY
+        _resolved_type = node_type if node_type else WorldNodeType.ENTITY
         async with self._driver.session() as session:
             await session.run(
                 """
@@ -83,14 +87,14 @@ class GraphEngine:
                 })
                 """,
                 node_id=node_id,
-                node_type=node_type.value,
+                node_type=_resolved_type.value,
                 name=normalized_name,
                 campaign_id=self.campaign_id,
                 attributes_json=json.dumps(normalized_attrs),
             )
         return WorldNode(
             id=node_id,
-            node_type=node_type,
+            node_type=_resolved_type,
             name=normalized_name,
             attributes=normalized_attrs,
             campaign_id=self.campaign_id,
@@ -198,9 +202,14 @@ class GraphEngine:
             nodes = []
             async for record in result:
                 b = record["b"]
+                raw_type = b.get("node_type")
+                try:
+                    node_type = WorldNodeType(raw_type) if raw_type else None
+                except ValueError:
+                    node_type = None
                 nodes.append(WorldNode(
                     id=b["node_id"],
-                    node_type=WorldNodeType(b["node_type"]),
+                    node_type=node_type,
                     name=b["name"],
                     attributes=json.loads(b.get("attributes_json", "{}")),
                     campaign_id=b["campaign_id"],
@@ -219,9 +228,14 @@ class GraphEngine:
             nodes = []
             async for record in result:
                 n = record["n"]
+                raw_type = n.get("node_type")
+                try:
+                    node_type = WorldNodeType(raw_type) if raw_type else WorldNodeType.ENTITY
+                except ValueError:
+                    node_type = WorldNodeType.ENTITY
                 nodes.append(WorldNode(
                     id=n["node_id"],
-                    node_type=WorldNodeType(n["node_type"]),
+                    node_type=node_type,
                     name=n["name"],
                     attributes=json.loads(n.get("attributes_json", "{}")),
                     campaign_id=n["campaign_id"],
@@ -247,8 +261,12 @@ class GraphEngine:
                 })
             return rels
 
-    async def update_node_attributes(self, node_id: str, attributes: dict) -> None:
+    async def update_node_attributes(
+        self, node_id: str, attributes: dict, node_type: str | None = None,
+    ) -> None:
         """Merge new attributes into an existing node (preserving old values).
+        Optionally update the node_type property as well.
+
         Slug values in attributes are normalized to display names."""
         # Normalize slug values in attributes
         normalized = dict(attributes or {})
@@ -260,15 +278,19 @@ class GraphEngine:
                 if converted != str(raw):
                     normalized[slug_field] = converted
         async with self._driver.session() as session:
-            await session.run(
-                """
+            query = """
                 MATCH (n:WorldNode {node_id: $node_id, campaign_id: $campaign_id})
                 SET n.attributes_json = $attributes_json
-                """,
-                node_id=node_id,
-                campaign_id=self.campaign_id,
-                attributes_json=json.dumps(normalized),
-            )
+            """
+            params = {
+                "node_id": node_id,
+                "campaign_id": self.campaign_id,
+                "attributes_json": json.dumps(normalized),
+            }
+            if node_type:
+                query += ", n.node_type = $node_type"
+                params["node_type"] = node_type
+            await session.run(query, **params)
 
     async def get_node_by_name(self, name: str) -> dict | None:
         """Find a node by name within the campaign. Returns the attributes dict or None."""

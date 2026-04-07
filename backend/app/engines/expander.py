@@ -448,7 +448,7 @@ def _get_ps_hints(genre_id: str | None) -> dict:
 # ---------------------------------------------------------------------------
 
 _JSON_EXAMPLE = """{
-  "protagonist_name": "",
+  "protagonist_name": "Linh Dong",
   "narrative_pov": "second_person",
   "writing_style": "chinh_thong",
   "tone_instructions": "",
@@ -531,7 +531,12 @@ def _build_system_prompt(
         f"    * stages: {stage_range} stage names (weakest to strongest)\n"
         f"    * each stage has sub_stages using '{sub_tiers_hint}'\n\n"
         f"NARRATIVE IDENTITY:\n"
-        f"  protagonist_name: main character name (default: empty)\n"
+        f"  protagonist_name: Generate a fitting main character name for this world's genre and setting. "
+        f"Consider the cultural/literary style of the genre. "
+        f"For fantasy/xianxia: use names like Linh Dong, Vân Tiêu, Tần Phong. "
+        f"For cyberpunk/scifi: use names like Kai Chen, Zara Vex, Nova Reed. "
+        f"For urban/modern: use names like Minh Huy, Linh Chi, Khải Minh. "
+        f"Generate a compelling, genre-appropriate name. NEVER leave this empty.\n"
         f"  narrative_pov: first_person | second_person | third_person | omniscient\n"
         f"  writing_style: chinh_thong | hao_sang | lanh_khot | tho_mong | hai_huoc | kich_tinh\n\n"
         f"Return ONLY valid JSON (no markdown, no explanation).\n\n"

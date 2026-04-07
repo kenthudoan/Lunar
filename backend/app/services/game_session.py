@@ -10,6 +10,34 @@ from app.engines.narrator_engine import NarrativeMode, estimate_tokens
 from app.engines.plot_generator import AUTO_PLOT_RULES
 from app.utils.json_parsing import parse_json_dict
 
+# Lazy singleton for EntityExtractor's LLM — reuses routes_game._llm to ensure API keys are loaded
+_entity_extractor_llm: "LLMRouter | None" = None
+
+
+def _get_entity_extractor_llm():
+    global _entity_extractor_llm
+    if _entity_extractor_llm is None:
+        # Lazy import to avoid circular dependency
+        # routes_game → game_session → routes_game would deadlock at module load
+        _entity_extractor_llm = _create_llm_router()
+    return _entity_extractor_llm
+
+
+def _create_llm_router():
+    """Create an LLM router with API keys loaded from environment."""
+    import os
+    from app.config import settings
+    # Ensure API keys are in os.environ for litellm (litellm reads from env, not config object)
+    if not os.environ.get("ANTHROPIC_API_KEY") and settings.anthropic_api_key:
+        os.environ["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
+    if not os.environ.get("DEEPSEEK_API_KEY") and settings.deepseek_api_key:
+        os.environ["DEEPSEEK_API_KEY"] = settings.deepseek_api_key
+    if not os.environ.get("OPENAI_API_KEY") and settings.openai_api_key:
+        os.environ["OPENAI_API_KEY"] = settings.openai_api_key
+    from app.engines.llm_router import LLMRouter, LLMConfig
+    return LLMRouter(LLMConfig())
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,6 +73,7 @@ class GameSession:
         plot_generator=None,
         inventory_engine=None,
         auto_plot_rules=None,
+        choice_generator=None,
         opening_narrative: str = "",
         story_cards: list | None = None,
         power_system=None,        # PowerSystemResolver instance or None
@@ -68,6 +97,8 @@ class GameSession:
         self._plot_generator = plot_generator
         self._inventory = inventory_engine
         self._power_system = power_system   # PowerSystemResolver instance
+        self._choice_generator = choice_generator   # ChoiceGenerator instance or None
+        self._entity_extractor = GameSession._try_create_entity_extractor()
 
         # ── Rank Advancer (rank entity system) ────────────────────────────
         self._rank_graph = None
@@ -105,6 +136,66 @@ class GameSession:
         self._player_power: int = 0
         self._player_power = self._init_player_power(opening_narrative)
 
+    def set_entity_extractor(self, extractor):
+        """Inject an EntityExtractor instance after construction."""
+        self._entity_extractor = extractor
+
+    @staticmethod
+    def _try_create_entity_extractor():
+        """Try to create an EntityExtractor using the shared module-level LLM router.
+        Returns None on failure (graceful degradation)."""
+        try:
+            from app.engines.entity_extractor import EntityExtractor
+            llm = _get_entity_extractor_llm()
+            return EntityExtractor(llm=llm)
+        except Exception:
+            logger.warning("Could not create EntityExtractor — entity extraction disabled")
+            return None
+
+    async def _reveal_entities_from_narrative(self, narrative_text: str) -> AsyncIterator[str]:
+        """Extract newly mentioned entities from narrator response and write ENTITY_REVEALED events.
+        Yields JSON chunk with newly discovered entities for the client."""
+        if not self._entity_extractor or not narrative_text:
+            return
+
+        # Load already-revealed names
+        revealed_events = self._event_store.get_by_type(
+            self.campaign_id, EventType.ENTITY_REVEALED
+        )
+        already_revealed: set[str] = {
+            (ev.payload.get("name") or "").lower()
+            for ev in revealed_events
+        }
+
+        turn_label = f"Turn {self._turn_count}"
+        result = await self._entity_extractor.extract(
+            narrative_text=narrative_text,
+            already_revealed=already_revealed,
+            language=self.language,
+            turn_label=turn_label,
+        )
+
+        for entity in result.newly_discovered:
+            self._event_store.append(
+                campaign_id=self.campaign_id,
+                event_type=EventType.ENTITY_REVEALED,
+                payload={
+                    "name": entity.name,
+                    "kind": entity.kind.value,
+                    "context": entity.context,
+                    "discovered_in": entity.discovered_in,
+                },
+                narrative_time_delta=0,
+                location="current",
+                entities=[entity.name],
+            )
+
+        if result.newly_discovered:
+            yield (
+                f"[ENTITY_REVEALED]"
+                f"{json.dumps({'entities': [{'name': e.name, 'kind': e.kind.value} for e in result.newly_discovered]})}"
+            )
+
     def _resolve_tier_display(self, value: str) -> str:
         """Resolve a tier value (slug or display name) → display name for UI.
         Uses power system config if available."""
@@ -133,8 +224,6 @@ class GameSession:
         self._rebuild_player_power()
         self._rebuild_known_opponent_powers()
 
-        if not self._history and opening_narrative:
-            self._history.append({"role": "assistant", "content": opening_narrative})
         return self._player_power
 
     def _last_pending_player_event(self):
@@ -1072,6 +1161,58 @@ class GameSession:
             except Exception:
                 logger.warning("Auto plot generation failed", exc_info=True)
 
+        # ── AI-Generated Choices ───────────────────────────────────────────
+        # Generate contextual action suggestions AFTER narrative is complete.
+        # Runs asynchronously — does not block the SSE stream.
+        # Skipped for:
+        #   - META mode (user is asking system questions)
+        if (
+            self._choice_generator
+            and mode != NarrativeMode.META
+            and self._history
+            and self._turn_count >= 1
+        ):
+            # _handle_narrative appends user_input + narrative_response to history.
+            # self._history[-1] is the latest narrative response.
+            narrative_response = self._history[-1].get("content", "") if self._history else ""
+            if narrative_response:
+                # Build truncated history: last 5 messages only (cost optimization)
+                # This gives enough context without sending full conversation.
+                truncated_history = self._history[-5:] if len(self._history) > 5 else list(self._history)
+                try:
+                    choice_set = await self._choice_generator.generate(
+                        history=truncated_history,
+                        narrative_response=narrative_response,
+                        turn_count=self._turn_count,
+                        narrative_time_seconds=narrative_time or 60,
+                        language=self.language,
+                    )
+                    if choice_set and choice_set.choices:
+                        logger.info("Choice generation SUCCESS: %d choices", len(choice_set.choices))
+                        choices_payload = {
+                            "choices": [
+                                {
+                                    "slot": c.slot,
+                                    "category_id": c.category_id,
+                                    "icon": c.icon,
+                                    "label": c.label,
+                                    "hint": c.hint,
+                                }
+                                for c in choice_set.choices
+                            ],
+                            "generated_at_turn": choice_set.generated_at_turn,
+                        }
+                        yield f"[CHOICES]{json.dumps(choices_payload)}"
+                    else:
+                        # choice_generator returned None or empty — send empty choices so
+                        # the frontend knows to stop waiting and shows the input normally.
+                        logger.warning("Choice generation returned None or empty — sending empty choices")
+                        yield f'[CHOICES]{{"choices":[],"generated_at_turn":{self._turn_count}}}'
+                except Exception:
+                    # Always send a response so the frontend doesn't hang waiting.
+                    logger.warning("Choice generation raised exception — sending empty choices", exc_info=True)
+                    yield f'[CHOICES]{{"choices":[],"generated_at_turn":{self._turn_count}}}'
+
         # ── Rank Entity Evaluation ────────────────────────────────────────────
         # After narrative, world tick, and auto-plot — evaluate rank advancement.
         # Uses the accumulated narrative from _history[-1] and player_input.
@@ -1467,6 +1608,21 @@ class GameSession:
         if self._is_journal_entry(entry):
             yield f"[JOURNAL]{json.dumps({'category': entry.category.value, 'summary': entry.summary, 'created_at': entry.created_at})}"
 
+        # Tell client: narrator done, choices are being generated (moved here so it fires
+        # immediately after [JOURNAL] instead of waiting for all background pipelines).
+        if (
+            self._choice_generator
+            and mode != NarrativeMode.META
+            and self._history
+            and self._turn_count >= 1
+        ):
+            yield "[CHOICES_PENDING]"
+
+        # Entity extraction: discover world entities mentioned in this narration
+        if self._entity_extractor and clean_response:
+            async for entity_chunk in self._reveal_entities_from_narrative(clean_response):
+                yield entity_chunk
+
         # Post-narrative side effects (only for non-META actions)
         if mode != NarrativeMode.META and clean_response:
             async for chunk in self._post_narrative_pipeline(clean_response):
@@ -1540,6 +1696,9 @@ class GameSession:
                         location="current",
                         entities=[],
                     )
+                    if self._entity_extractor:
+                        async for entity_chunk in self._reveal_entities_from_narrative(rejection_text):
+                            yield entity_chunk
                     return
 
                 combat_opponent_name = meta.get("opponent_name", "opponent")
@@ -1806,6 +1965,20 @@ class GameSession:
         if self._is_journal_entry(entry):
             yield f"[JOURNAL]{json.dumps({'category': entry.category.value, 'summary': entry.summary, 'created_at': entry.created_at})}"
 
+        # Tell client: narrator done, choices are being generated
+        if (
+            self._choice_generator
+            and mode != NarrativeMode.META
+            and self._history
+            and self._turn_count >= 1
+        ):
+            yield "[CHOICES_PENDING]"
+
+        # Entity extraction for single-call mode
+        if self._entity_extractor and clean_response:
+            async for entity_chunk in self._reveal_entities_from_narrative(clean_response):
+                yield entity_chunk
+
         # Combat journal entry (same as streaming path)
         if combat_outcome and clean_response:
             combat_summary = (
@@ -1942,6 +2115,45 @@ class GameSession:
                     yield chunk
             except Exception:
                 logger.warning("Auto plot generation failed", exc_info=True)
+
+        # ── AI-Generated Choices (single-call path) ───────────────────────────
+        if (
+            self._choice_generator
+            and mode != NarrativeMode.META
+            and self._history
+            and self._turn_count >= 1
+        ):
+            narrative_response = self._history[-1].get("content", "") if self._history else ""
+            if narrative_response:
+                truncated_history = self._history[-5:] if len(self._history) > 5 else list(self._history)
+                try:
+                    choice_set = await self._choice_generator.generate(
+                        history=truncated_history,
+                        narrative_response=narrative_response,
+                        turn_count=self._turn_count,
+                        narrative_time_seconds=narrative_time or 60,
+                        language=self.language,
+                    )
+                    if choice_set and choice_set.choices:
+                        choices_payload = {
+                            "choices": [
+                                {
+                                    "slot": c.slot,
+                                    "category_id": c.category_id,
+                                    "icon": c.icon,
+                                    "label": c.label,
+                                    "hint": c.hint,
+                                }
+                                for c in choice_set.choices
+                            ],
+                            "generated_at_turn": choice_set.generated_at_turn,
+                        }
+                        yield f"[CHOICES]{json.dumps(choices_payload)}"
+                    else:
+                        yield f'[CHOICES]{{"choices":[],"generated_at_turn":{self._turn_count}}}'
+                except Exception:
+                    logger.warning("Choice generation failed (single-call)", exc_info=True)
+                    yield f'[CHOICES]{{"choices":[],"generated_at_turn":{self._turn_count}}}'
 
     def _apply_inventory_event(self, inv_event: dict) -> None:
         """Apply a single inventory event (add/use/lose)."""
@@ -2242,6 +2454,9 @@ class GameSession:
                     location="current",
                     entities=[],
                 )
+                if self._entity_extractor:
+                    async for entity_chunk in self._reveal_entities_from_narrative(rejection_text):
+                        yield entity_chunk
                 return
 
             opponent_name = meta.get("opponent_name", "opponent")

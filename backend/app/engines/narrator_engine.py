@@ -460,8 +460,11 @@ class NarratorEngine:
           - instant  : chunks emitted as fast as possible (no throttle)
           - fast     : ~5ms delay between chunks
           - normal   : ~20ms delay between chunks
-          - slow     : ~100ms delay between chunks
-          - typewriter: ~60ms delay (word-grouped for authentic feel)
+          - moderate : ~60ms delay between chunks
+          - slow120  : ~120ms delay between chunks
+          - slow130  : ~130ms delay between chunks
+          - slow     : ~150ms delay between chunks
+          - typewriter: ~350ms delay, word-grouped for authentic typewriter feel
         """
         import asyncio
 
@@ -469,8 +472,11 @@ class NarratorEngine:
             "instant":     0.0,
             "fast":        0.005,
             "normal":      0.02,
-            "slow":        0.1,
-            "typewriter":  0.065,
+            "moderate":    0.06,
+            "slow120":     0.12,
+            "slow130":     0.13,
+            "slow":        0.15,
+            "typewriter":  0.35,
         }
         delay = _DELIVERY_DELAYS.get(stream_delivery_speed, 0.0)
         is_typewriter = stream_delivery_speed == "typewriter"

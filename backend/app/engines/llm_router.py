@@ -71,6 +71,17 @@ class LLMConfig:
 _ANTHROPIC_PROXY_URL = os.environ.get("ANTHROPIC_PROXY_URL", "")
 _ANTHROPIC_PROXY_KEY = os.environ.get("ANTHROPIC_PROXY_KEY", "proxy")
 
+# Module-level shared singleton — use this instead of creating a new LLMRouter
+_shared_router: "LLMRouter | None" = None
+
+
+def get_shared_llm_router() -> "LLMRouter":
+    """Return the shared LLMRouter singleton. Creates one if not yet initialized."""
+    global _shared_router
+    if _shared_router is None:
+        _shared_router = LLMRouter(LLMConfig())
+    return _shared_router
+
 
 class LLMRouter:
     def __init__(self, config: LLMConfig):
@@ -97,6 +108,28 @@ class LLMRouter:
         if api_base:
             call_kwargs["api_base"] = api_base
             call_kwargs["api_key"] = _ANTHROPIC_PROXY_KEY
+
+        def _extract_content(response) -> str:
+            # litellm can return unexpected formats from some providers
+            # (e.g. DeepSeek sometimes returns choices as raw strings)
+            try:
+                if hasattr(response, "choices"):
+                    choice = response.choices[0]
+                    if hasattr(choice, "message") and hasattr(choice.message, "content"):
+                        content = choice.message.content
+                        if content is None:
+                            raise ValueError("LLM returned empty content (None)")
+                        return content
+                    # litellm wrapped response — try to get raw content
+                    if isinstance(choice, str):
+                        return choice
+                    raise ValueError(f"Unexpected litellm response shape: {type(response)} / {type(choice)}")
+                raise ValueError(f"litellm response has no 'choices': {type(response)}")
+            except ValueError:
+                raise
+            except Exception as parse_err:
+                raise ValueError(f"Failed to parse litellm response: {parse_err}") from parse_err
+
         try:
             response = await litellm.acompletion(
                 model=model,
@@ -105,10 +138,7 @@ class LLMRouter:
                 max_tokens=max_tokens,
                 **call_kwargs,
             )
-            content = response.choices[0].message.content
-            if content is None:
-                raise ValueError("LLM returned empty content (None)")
-            return content
+            return _extract_content(response)
         except Exception as primary_err:
             if self.config.fallback_provider and self.config.fallback_model:
                 fallback_model = self._build_model_string(
@@ -119,14 +149,17 @@ class LLMRouter:
                 if fb_api_base:
                     fb_kwargs["api_base"] = fb_api_base
                     fb_kwargs["api_key"] = _ANTHROPIC_PROXY_KEY
-                response = await litellm.acompletion(
-                    model=fallback_model,
-                    messages=messages,
-                    temperature=self.config.temperature,
-                    max_tokens=self.config.max_tokens,
-                    **fb_kwargs,
-                )
-                return response.choices[0].message.content
+                try:
+                    response = await litellm.acompletion(
+                        model=fallback_model,
+                        messages=messages,
+                        temperature=self.config.temperature,
+                        max_tokens=self.config.max_tokens,
+                        **fb_kwargs,
+                    )
+                    return _extract_content(response)
+                except Exception:
+                    raise primary_err from primary_err
             raise
 
     async def stream(self, messages: list[dict], **kwargs) -> AsyncIterator[str]:

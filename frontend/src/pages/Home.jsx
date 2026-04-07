@@ -109,8 +109,16 @@ export default function Home() {
   const handleDeleteScenario = async (scenarioId) => {
     if (!window.confirm(t('error.deleteConfirm'))) return
     try {
+      // Collect campaign IDs BEFORE deleting from server — needed to clean localStorage
+      const campaignIds = (campaignsMap[scenarioId] || []).map((c) => c.id)
       await deleteScenario(scenarioId)
       setScenarios(scenarios.filter((s) => s.id !== scenarioId))
+      // Also remove all campaign data from localStorage so stale Play links die
+      try {
+        const all = JSON.parse(localStorage.getItem('lunar_campaigns') || '{}')
+        campaignIds.forEach((cid) => { delete all[cid] })
+        localStorage.setItem('lunar_campaigns', JSON.stringify(all))
+      } catch {}
     } catch {
       alert(t('generic.error'))
     }
@@ -229,7 +237,7 @@ export default function Home() {
                             </span>
                           )}
                           {s.narrative_pov && (
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--info)] border border-[rgba(96,165,250,0.2)] text-[var(--info)] font-medium">
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--info)] border border-[rgba(96,165,250,0.2)] font-medium">
                               {s.narrative_pov === 'first_person' ? 'Ngôi 1' :
                                s.narrative_pov === 'second_person' ? 'Ngôi 2' :
                                s.narrative_pov === 'third_person' ? 'Ngôi 3' :

@@ -84,6 +84,8 @@ const NODE_COLORS = {
   EVENT: '#fb7185',
 }
 
+const VALID_NODE_TYPES = new Set(['NPC', 'LOCATION', 'FACTION', 'ITEM', 'EVENT'])
+
 const NODE_RADIUS = {
   NPC: 6, LOCATION: 8, FACTION: 7, ITEM: 5, EVENT: 5,
 }
@@ -174,7 +176,15 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
         fetchWorldGraph(campaignId),
         fetchCampaignPowerSystem(campaignId),
       ])
-      setGraphData(graphDataResult.status === 'fulfilled' ? graphDataResult.value : { nodes: [], links: [] })
+      const raw = graphDataResult.status === 'fulfilled' ? graphDataResult.value : { nodes: [], links: [] }
+      const filtered = {
+        nodes: raw.nodes.filter(n => VALID_NODE_TYPES.has(n.node_type)),
+        links: raw.links.filter(l =>
+          raw.nodes.some(n => n.id === l.source && VALID_NODE_TYPES.has(n.node_type)) &&
+          raw.nodes.some(n => n.id === l.target && VALID_NODE_TYPES.has(n.node_type))
+        ),
+      }
+      setGraphData(filtered)
       setPowerSystem(psResult.status === 'fulfilled' ? psResult.value : null)
     } catch {
       setGraphData({ nodes: [], links: [] })
@@ -186,6 +196,14 @@ export default function WorldMapModal({ open, onClose, campaignId }) {
 
   useEffect(() => {
     if (open) { loadGraph(); setSelectedNode(null); setSearchHighlightSet(null) }
+  }, [open, campaignId])
+
+  // Reload graph when new entities are discovered via SSE (entity extraction)
+  useEffect(() => {
+    if (!open) return
+    const handler = () => loadGraph()
+    window.addEventListener('worldmap:refresh', handler)
+    return () => window.removeEventListener('worldmap:refresh', handler)
   }, [open, campaignId])
 
   useEffect(() => {

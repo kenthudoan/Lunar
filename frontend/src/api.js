@@ -240,6 +240,15 @@ export async function updateStoryCard(scenarioId, cardId, data) {
   return r.json()
 }
 
+export async function deleteStoryCard(scenarioId, cardId) {
+  const r = await fetch(`${BASE}/scenarios/${scenarioId}/story-cards/${cardId}`, {
+    method: 'DELETE',
+    headers: authHeader(),
+  })
+  if (!r.ok) throw new Error('Failed to delete story card')
+  return r.json()
+}
+
 export async function fetchCampaigns(scenarioId) {
   const r = await fetch(`${BASE}/scenarios/${scenarioId}/campaigns`, { headers: authHeader() })
   if (!r.ok) throw new Error('Failed to fetch campaigns')
@@ -301,7 +310,10 @@ export async function importScenario(data) {
 // ---- Game ----
 export async function fetchHistory(campaignId) {
   const r = await fetch(`${BASE}/game/${campaignId}/history`, { headers: authHeader() })
-  if (!r.ok) throw new Error('Failed to fetch history')
+  if (!r.ok) {
+    const detail = r.status === 404 ? '404' : 'Failed to fetch history'
+    throw new Error(detail)
+  }
   return r.json()
 }
 
@@ -314,7 +326,10 @@ export async function fetchCampaignScenario(campaignId) {
 
 export async function getPendingAction(campaignId) {
   const r = await fetch(`${BASE}/game/${campaignId}/pending-action`, { headers: authHeader() })
-  if (!r.ok) throw new Error('Failed to check pending action')
+  if (!r.ok) {
+    const detail = r.status === 404 ? '404' : 'Failed to check pending action'
+    throw new Error(detail)
+  }
   return r.json()
 }
 
@@ -332,7 +347,8 @@ export function streamAction({
   streamDeliverySpeed = 'instant',
   onChunk, onJournal, onMode, onCrystal, onPlotAuto, onInventory,
   onTruncateClean, onDone, onError,
-  onPendingActionId, onRankAdvance,
+  onPendingActionId, onRankAdvance, onChoices, onChoicesPending,
+  onEntityRevealed,
 }) {
   // Generate a pending ID so we can detect incomplete responses after reload
   const pendingId = `pending-${campaignId}-${Date.now()}`
@@ -392,6 +408,18 @@ export function streamAction({
           try { onRankAdvance?.(JSON.parse(control.slice(13))) } catch {}
           return false
         }
+        if (control === '[CHOICES_PENDING]') {
+          onChoicesPending?.()
+          return false
+        }
+        if (control.startsWith('[CHOICES]')) {
+          try { onChoices?.(JSON.parse(control.slice(9))) } catch {}
+          return false
+        }
+        if (control.startsWith('[ENTITY_REVEALED]')) {
+          try { onEntityRevealed?.(JSON.parse(control.slice(16))) } catch {}
+          return false
+        }
         let cleaned = stripPowerControlTags(data)
         cleaned = cleaned.replace(INTERNAL_TAG_STRIP_REGEX, '')
         // Must not use trim() as the guard: LLM stream often sends spaces/newlines as
@@ -437,6 +465,12 @@ export async function rewindLastAction(campaignId) {
     headers: authHeader(),
   })
   if (!r.ok) throw new Error('Failed to rewind')
+  return r.json()
+}
+
+export async function fetchChoices(campaignId) {
+  const r = await fetch(`${BASE}/game/${campaignId}/choices`, { headers: authHeader() })
+  if (!r.ok) return null
   return r.json()
 }
 

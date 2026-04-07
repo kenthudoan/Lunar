@@ -9,6 +9,7 @@ from app.db.event_store import EventStore
 from app.middleware.auth import AuthUser, get_current_user
 from app.engines.llm_router import LLMRouter, LLMConfig
 from app.services.power_system_service import PowerSystemService
+from app.config import settings
 
 router = APIRouter()
 
@@ -29,6 +30,16 @@ def _get_ps_service() -> PowerSystemService:
     llm = LLMRouter(LLMConfig())
     store = _get_store()
     return PowerSystemService(store, llm)
+
+
+def _get_graph_engine(campaign_id: str):
+    """Get or create a GraphEngine to clear Neo4j data for a campaign."""
+    try:
+        from app.engines.graph_engine import GraphEngine
+        engine = GraphEngine(settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password, campaign_id)
+        return engine
+    except Exception:
+        return None
 
 
 class CreateScenarioRequest(BaseModel):
@@ -346,6 +357,14 @@ def delete_campaign(scenario_id: str, campaign_id: str, current_user: AuthUser =
         event_store.delete_by_campaign(campaign_id)
     finally:
         event_store.close()
+    # Clear Neo4j world graph for this campaign
+    graph = _get_graph_engine(campaign_id)
+    if graph:
+        try:
+            import asyncio
+            asyncio.get_event_loop().run_until_complete(graph.clear_campaign(campaign_id))
+        except Exception:
+            pass
     return {"status": "ok"}
 
 
@@ -367,6 +386,15 @@ def delete_scenario(scenario_id: str, current_user: AuthUser = Depends(get_curre
             event_store.delete_by_campaign(c.id)
     finally:
         event_store.close()
+    # Clear Neo4j world graph for all campaigns of this scenario
+    for c in campaigns:
+        graph = _get_graph_engine(c.id)
+        if graph:
+            try:
+                import asyncio
+                asyncio.get_event_loop().run_until_complete(graph.clear_campaign(c.id))
+            except Exception:
+                pass
     return {"status": "ok"}
 
 

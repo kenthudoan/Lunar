@@ -192,12 +192,14 @@ class RankGraph:
         self, name: str, campaign_id: str, attributes: dict,
     ) -> None:
         """Set label + properties on an existing or new RankEntity node."""
+        node_id = await self._find_entity_id(name, campaign_id)
         await self._graph.update_node_attributes(
-            node_id=await self._find_entity_id(name, campaign_id),
+            node_id=node_id,
             attributes={
                 **attributes,
                 "_campaign_id": campaign_id,  # used for matching in Cypher
             },
+            node_type="RANK",
         )
         async with self._graph._driver.session() as session:
             await session.run(
